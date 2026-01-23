@@ -1,0 +1,54 @@
+[package]
+name = "innkeeper"
+version = "0.1.0"
+edition = "2021"
+description = "Discord-WoW chat bridge for Ascension private server"
+authors = ["Innkeeper Contributors"]
+license = "MIT"
+repository = "https://github.com/anomalyco/innkeeper"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Networking & serialization
+bytes = "1"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# Cryptography
+sha1 = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+chacha20poly1305 = "0.10"
+
+# Discord
+serenity = { version = "0.12", default-features = false, features = [
+    "client",
+    "gateway",
+    "rustls_backend",
+    "model",
+    "cache",
+] }
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hocon = { version = "0.9", features = ["serde-support"] }
+
+# Utilities
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+regex = "1"
+
+# Optional: emoji handling
+emojis = "0.6"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
