@@ -65,12 +65,13 @@ Track progress here. Update status as work proceeds.
 
 ## Phase 6: Bridge & Message Routing
 
-- [ ] Channel mapping (WoW channel <-> Discord channel)
-- [ ] WoW -> Discord message routing (`src/bridge/router.rs`)
-- [ ] Discord -> WoW message routing
-- [ ] Message formatting (`src/bridge/formatter.rs`)
-- [ ] Regex filtering (`src/bridge/filter.rs`)
-- [ ] Dot command passthrough (.commands)
+- [x] Channel mapping (WoW channel <-> Discord channel)
+- [x] WoW -> Discord message routing (`src/game/router.rs`)
+- [x] Discord -> WoW message routing
+- [x] Message formatting (`src/game/formatter.rs`)
+- [x] Regex filtering (`src/game/filter.rs`)
+- [x] Dot command passthrough (.commands)
+- [x] Bridge orchestrator (`src/game/bridge.rs`)
 
 ## Phase 9: Configuration
 
@@ -97,6 +98,7 @@ Track progress here. Update status as work proceeds.
 - [ ] Unit tests: Header encryption (NOP)
 - [ ] Unit tests: Packet serialization
 - [x] Unit tests: Message formatting (resolver tests)
+- [x] Unit tests: Filter, formatter, router (game module tests)
 - [ ] Integration test: Mock realm server
 - [ ] Integration test: Mock game server
 - [ ] Manual test: Connect to Ascension
@@ -108,6 +110,15 @@ Track progress here. Update status as work proceeds.
 ## Notes
 
 _Add implementation notes, issues discovered, and decisions made during development here._
+
+### 2026-01-26 (Session 4)
+- Phase 6 complete: Bridge & Message Routing implemented.
+- **filter.rs**: Message filtering with compiled regex patterns for WoW->Discord and Discord->WoW directions. Invalid patterns are logged and skipped. 7 unit tests.
+- **formatter.rs**: Message formatting with %time, %user, %message, %target, %channel placeholders. Message splitting for WoW's 255 char limit. Discord markdown escaping. 8 unit tests.
+- **router.rs**: Channel mapping between WoW and Discord. Supports guild/officer/say/yell/emote/whisper/custom channels. Bidirectional routing with direction filtering. 8 unit tests.
+- **bridge.rs**: Main orchestrator tying filter, formatter, router, and resolver together. Handles WoW->Discord and Discord->WoW message flow. Dot command passthrough. 3 unit tests.
+- Added `chrono` crate for time formatting.
+- All 41 tests pass, compilation clean (warnings only for unused code since main.rs is minimal).
 
 ### 2026-01-26 (Session 3)
 - Phase 5 complete: Discord integration implemented.
@@ -147,4 +158,4 @@ _Add implementation notes, issues discovered, and decisions made during developm
 
 ---
 
-*Last updated: 2026-01-26*
+*Last updated: 2026-01-26 (Session 4)*

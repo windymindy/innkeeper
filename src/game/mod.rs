@@ -1,5 +1,20 @@
 //! Game logic and message routing.
+//!
+//! This module contains:
+//! - Message filtering with regex patterns
+//! - Message formatting with placeholder substitution
+//! - Channel routing between WoW and Discord
+//! - The main bridge orchestrator
 
+pub mod bridge;
 pub mod filter;
 pub mod formatter;
 pub mod router;
+
+// Re-export commonly used types
+pub use bridge::{
+    Bridge, BridgeChannels, BridgeCommand, DiscordMessage, OutgoingWowMessage, WowMessage,
+};
+pub use filter::MessageFilter;
+pub use formatter::{escape_discord_markdown, split_message, FormatContext, MessageFormatter};
+pub use router::{Direction, MessageRouter, Route, SharedRouter, WowChannel};

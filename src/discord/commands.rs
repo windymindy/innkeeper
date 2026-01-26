@@ -163,7 +163,7 @@ pub fn format_who_search_response(
             let guild_str = guild.as_ref().map(|g| format!(" <{}>", g)).unwrap_or_default();
             format!("**{}**{} - Level {} in {}", name, guild_str, level, zone)
         }
-        None => format!("No player named '{}' is currently online.", player_name),
+        None => format!("Player '{}' is not currently online.", player_name),
     }
 }
 
