@@ -42,14 +42,14 @@ Track progress here. Update status as work proceeds.
 
 ## Phase 4: Chat & Guild
 
-- [ ] SMSG_MESSAGECHAT parsing (`src/protocol/game/chat.rs`)
-- [ ] CMSG_MESSAGECHAT sending
-- [ ] Channel join (CMSG_JOIN_CHANNEL)
-- [ ] SMSG_CHANNEL_NOTIFY handling
-- [ ] SMSG_GUILD_ROSTER parsing (`src/protocol/game/guild.rs`)
-- [ ] SMSG_GUILD_EVENT handling
-- [ ] SMSG_GUILD_QUERY handling
-- [ ] CMSG_NAME_QUERY / SMSG_NAME_QUERY for player names
+- [x] SMSG_MESSAGECHAT parsing (`src/protocol/game/chat.rs`)
+- [x] CMSG_MESSAGECHAT sending
+- [x] Channel join (CMSG_JOIN_CHANNEL)
+- [x] SMSG_CHANNEL_NOTIFY handling
+- [x] SMSG_GUILD_ROSTER parsing (`src/protocol/game/guild.rs`)
+- [x] SMSG_GUILD_EVENT handling
+- [x] SMSG_GUILD_QUERY handling
+- [x] CMSG_NAME_QUERY / SMSG_NAME_QUERY for player names
 
 ## Phase 5: Discord Integration
 
@@ -108,6 +108,13 @@ Track progress here. Update status as work proceeds.
 ## Notes
 
 _Add implementation notes, issues discovered, and decisions made during development here._
+
+### 2026-01-26 (Session 2)
+- Phase 4 complete: Chat and Guild message handling implemented.
+- **chat.rs**: Added `SMSG_MESSAGECHAT` parsing, `CMSG_MESSAGECHAT` sending, `CMSG_JOIN_CHANNEL`, `SMSG_CHANNEL_NOTIFY`, name query packets.
+- **guild.rs**: Added `SMSG_GUILD_ROSTER` parsing, `SMSG_GUILD_EVENT` handling, `SMSG_GUILD_QUERY` parsing.
+- Updated `GameHandler` with full chat/guild handling methods and player name cache.
+- All packets include proper serialization/deserialization matching Scala reference.
 
 ### 2026-01-26
 - Phase 3 complete: Game connection, authentication, and character selection implemented.

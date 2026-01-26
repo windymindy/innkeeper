@@ -13,3 +13,14 @@ pub use packets::{
     AuthChallenge, AuthResponse, AuthSession, CharEnum, CharacterInfo, LoginVerifyWorld, Ping,
     PlayerLogin, Pong,
 };
+
+// Re-export chat types
+pub use chat::{
+    chat_events, chat_notify, languages, ChannelNotify, JoinChannelWotLK, MessageChat, NameQuery,
+    NameQueryResponse, SendChatMessage,
+};
+
+// Re-export guild types
+pub use guild::{
+    guild_events, GuildEventPacket, GuildQuery, GuildQueryResponse, GuildRoster, GuildRosterRequest,
+};
