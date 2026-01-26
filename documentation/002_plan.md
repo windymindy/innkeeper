@@ -53,15 +53,15 @@ Track progress here. Update status as work proceeds.
 
 ## Phase 5: Discord Integration
 
-- [ ] Choose Discord library (Serenity vs Twilight)
+- [x] Choose Discord library (Serenity)
 - [x] Bot connection and authentication setup (`src/discord/bot.rs`)
-- [ ] Message received event handler (`src/discord/handler.rs`)
-- [ ] Message sending to channels
-- [ ] !who command (`src/discord/commands.rs`)
-- [ ] !gmotd command
-- [ ] Emoji resolution (`src/discord/resolver.rs`)
-- [ ] @mention resolution
-- [ ] Link transformation (item links, etc.)
+- [x] Message received event handler (`src/discord/handler.rs`)
+- [x] Message sending to channels
+- [x] !who command (`src/discord/commands.rs`)
+- [x] !gmotd command
+- [x] Emoji resolution (`src/discord/resolver.rs`)
+- [x] @mention resolution
+- [x] Link transformation (item links, etc.)
 
 ## Phase 6: Bridge & Message Routing
 
@@ -96,7 +96,7 @@ Track progress here. Update status as work proceeds.
 
 - [ ] Unit tests: Header encryption (NOP)
 - [ ] Unit tests: Packet serialization
-- [ ] Unit tests: Message formatting
+- [x] Unit tests: Message formatting (resolver tests)
 - [ ] Integration test: Mock realm server
 - [ ] Integration test: Mock game server
 - [ ] Manual test: Connect to Ascension
@@ -108,6 +108,20 @@ Track progress here. Update status as work proceeds.
 ## Notes
 
 _Add implementation notes, issues discovered, and decisions made during development here._
+
+### 2026-01-26 (Session 3)
+- Phase 5 complete: Discord integration implemented.
+- **bot.rs**: Discord bot with Serenity, event handling, message forwarding, channel state management.
+- **handler.rs**: Bridge event handler with bidirectional message flow, command integration.
+- **resolver.rs**: Full message resolver with:
+  - WoW item/spell/quest/achievement link parsing (Ascension DB URLs)
+  - Color coding stripping (`|cFFFFFFFF...|r`)
+  - Texture coding stripping (`|T...|t`)
+  - Discord emoji resolution (`:emoji:` -> `<:emoji:id>`)
+  - Discord -> WoW mention/channel/role/emoji conversion
+  - Message splitting for WoW's 255 char limit
+- **commands.rs**: `!who`, `!gmotd`, `!help` command handlers with response formatters.
+- All tests pass (`cargo test`), compilation clean.
 
 ### 2026-01-26 (Session 2)
 - Phase 4 complete: Chat and Guild message handling implemented.
