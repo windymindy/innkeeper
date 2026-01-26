@@ -70,6 +70,9 @@ pub enum ProtocolError {
 
     #[error("Decryption error: {message}")]
     DecryptionError { message: String },
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Connection-related errors.

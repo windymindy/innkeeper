@@ -10,6 +10,7 @@ repository = "https://github.com/anomalyco/innkeeper"
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 
 # Networking & serialization
 bytes = "1"
@@ -20,6 +21,9 @@ sha1 = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
 chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand = "0.8"
+hex-literal = "0.4"
 
 # Discord
 serenity = { version = "0.12", default-features = false, features = [

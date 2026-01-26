@@ -12,33 +12,33 @@ Track progress here. Update status as work proceeds.
 
 ## Phase 1: Core Infrastructure
 
-- [ ] Create Cargo.toml with dependencies
-- [ ] Set up directory structure
-- [ ] Implement error types (`src/common/error.rs`)
-- [ ] Set up tracing/logging
-- [ ] Define opcode constants (`src/protocol/packets/opcodes.rs`)
-- [ ] Create shared types (Player, GuildMember, ChatMessage, etc.)
+- [x] Create Cargo.toml with dependencies
+- [x] Set up directory structure
+- [x] Implement error types (`src/common/error.rs`)
+- [x] Set up tracing/logging
+- [x] Define opcode constants (`src/protocol/packets/opcodes.rs`)
+- [x] Create shared types (Player, GuildMember, ChatMessage, etc.)
 
 ## Phase 2: Realm Connection
 
-- [ ] TCP connector with Tokio (`src/protocol/realm/connector.rs`)
-- [ ] Realm packet codec (encode/decode)
-- [ ] AUTH_LOGON_CHALLENGE handling
-- [ ] AUTH_LOGON_PROOF handling (Ascension variant)
-- [ ] Realm list parsing
-- [ ] Session key extraction and storage
-- [ ] Reconnection with exponential backoff
+- [x] TCP connector with Tokio (`src/protocol/realm/connector.rs`)
+- [x] Realm packet codec (encode/decode)
+- [x] AUTH_LOGON_CHALLENGE handling
+- [x] AUTH_LOGON_PROOF handling (Ascension variant)
+- [x] Realm list parsing
+- [x] Session key extraction and storage
+- [x] Reconnection with exponential backoff
 
 ## Phase 3: Game Connection
 
-- [ ] Game server TCP connector (`src/protocol/game/connector.rs`)
-- [ ] Game packet codec with encryption
-- [ ] SMSG_AUTH_CHALLENGE handling
-- [ ] CMSG_AUTH_SESSION sending
-- [ ] SMSG_AUTH_RESPONSE handling
-- [ ] CMSG_CHAR_ENUM / SMSG_CHAR_ENUM
-- [ ] CMSG_PLAYER_LOGIN / SMSG_LOGIN_VERIFY_WORLD
-- [ ] CMSG_PING keep-alive loop
+- [x] Game server TCP connector (`src/protocol/game/connector.rs`)
+- [x] Game packet codec (WotLK/Ascension variant)
+- [x] SMSG_AUTH_CHALLENGE handling
+- [x] CMSG_AUTH_SESSION sending
+- [x] SMSG_AUTH_RESPONSE handling
+- [x] CMSG_CHAR_ENUM / SMSG_CHAR_ENUM
+- [x] CMSG_PLAYER_LOGIN / SMSG_LOGIN_VERIFY_WORLD
+- [x] CMSG_PING keep-alive loop
 
 ## Phase 4: Chat & Guild
 
@@ -54,7 +54,7 @@ Track progress here. Update status as work proceeds.
 ## Phase 5: Discord Integration
 
 - [ ] Choose Discord library (Serenity vs Twilight)
-- [ ] Bot connection and authentication (`src/discord/bot.rs`)
+- [x] Bot connection and authentication setup (`src/discord/bot.rs`)
 - [ ] Message received event handler (`src/discord/handler.rs`)
 - [ ] Message sending to channels
 - [ ] !who command (`src/discord/commands.rs`)
@@ -74,11 +74,10 @@ Track progress here. Update status as work proceeds.
 
 ## Phase 9: Configuration
 
-- [ ] TOML parser (`src/config/parser.rs`)
-- [ ] Config types with serde (`src/config/types.rs`)
+- [x] HOCON parser (`src/config/parser.rs`)
+- [x] Config types with serde (`src/config/types.rs`)
 - [ ] Environment variable overrides (DISCORD_TOKEN, WOW_ACCOUNT, etc.)
 - [ ] Config validation
-- [ ] Migration notes for HOCON -> TOML
 
 ## Phase 10: Polish & Release
 
@@ -95,7 +94,7 @@ Track progress here. Update status as work proceeds.
 
 ## Testing Checklist
 
-- [ ] Unit tests: Header encryption
+- [ ] Unit tests: Header encryption (NOP)
 - [ ] Unit tests: Packet serialization
 - [ ] Unit tests: Message formatting
 - [ ] Integration test: Mock realm server
@@ -110,6 +109,15 @@ Track progress here. Update status as work proceeds.
 
 _Add implementation notes, issues discovered, and decisions made during development here._
 
+### 2026-01-26
+- Phase 3 complete: Game connection, authentication, and character selection implemented.
+- Packets: `SMSG_AUTH_CHALLENGE`, `CMSG_AUTH_SESSION` (SHA1+AddonInfo), `SMSG_CHAR_ENUM`, `CMSG_PLAYER_LOGIN`.
+- Verified `ADDON_INFO` hex payload matches Scala source (length 685).
+- Phase 1 & 2 complete.
+- Ascension authentication (X25519/ChaCha20) implemented and verified via `cargo check`.
+- Game packet codec implemented (handles standard and large WotLK packets).
+- HOCON configuration support verified with `hocon` crate.
+
 ### 2026-01-23
 - Design document created
 - Decided on Ascension-only support
@@ -118,4 +126,4 @@ _Add implementation notes, issues discovered, and decisions made during developm
 
 ---
 
-*Last updated: 2026-01-23*
+*Last updated: 2026-01-26*
