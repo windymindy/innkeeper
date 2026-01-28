@@ -48,7 +48,7 @@ pub struct GameHandler {
 impl GameHandler {
     pub fn new(account: &str, session_key: [u8; 40], realm_id: u32) -> Self {
         Self {
-            account: account.to_uppercase(),
+            account: account.to_string(),
             session_key,
             realm_id,
             player: None,

@@ -34,7 +34,7 @@ const VERSION_STRING: &[u8] =
     b"1|1|DD541D7D87F3A757680395DD1BB309CC8A27D23F695307F3103BD5E283C57C92";
 
 const XOR_MASK: u8 = 0xED;
-const HEADER_MAGIC: u32 = 0xFCF4F4E6;
+const HEADER_MAGIC: u32 = 0xE6F4F4FC;
 
 /// Handles realm authentication for Ascension.
 pub struct RealmHandler {
@@ -52,7 +52,29 @@ impl RealmHandler {
     /// Create a new realm handler with account credentials.
     pub fn new(account: &str, password: &str) -> Self {
         // Generate random secret key
-        let secret_key = StaticSecret::random_from_rng(rand::thread_rng());
+        let secret_key_bytes = {
+            let secret_key = StaticSecret::random_from_rng(rand::thread_rng());
+            secret_key.to_bytes()
+        };
+
+        // Generate random nonce
+        let mut nonce = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+
+        Self::from_keys(account, password, secret_key_bytes, nonce)
+    }
+
+    /// Internal constructor that creates a handler from provided keys.
+    /// This is the actual implementation used by both production and tests.
+    fn from_keys(
+        account: &str,
+        password: &str,
+        secret_key_bytes: [u8; 32],
+        nonce: [u8; 12],
+    ) -> Self {
+        // Create secret key from bytes
+        // Note: For testing, provide pre-clamped keys
+        let secret_key = StaticSecret::from(secret_key_bytes);
         let public_key = PublicKey::from(&secret_key);
 
         // Calculate shared secret with constant key
@@ -60,16 +82,17 @@ impl RealmHandler {
         let shared_secret = secret_key.diffie_hellman(&key_constant_1_pk);
 
         // Derive keys from shared secret
+        // Note: Scala signature is derive_key(key, input_1, input_2, size)
         let key_derived = Self::derive_key(
+            &KEY_CONSTANT_3,
             shared_secret.as_bytes(),
             &INPUT_CONSTANT_4,
-            &KEY_CONSTANT_3,
             32,
         );
         let key_session_vec = Self::derive_key(
+            &KEY_CONSTANT_3,
             shared_secret.as_bytes(),
             &INPUT_CONSTANT_5,
-            &KEY_CONSTANT_3,
             40,
         );
 
@@ -82,13 +105,9 @@ impl RealmHandler {
         // Pre-calculate proof
         let proof_2 = Self::hmac_sha256(&key_derived_arr, &INPUT_CONSTANT_6);
 
-        // Generate random nonce
-        let mut nonce = [0u8; 12];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
-
         Self {
-            account: account.to_uppercase(),
-            password: password.to_uppercase(),
+            account: account.to_string(),
+            password: password.to_string(),
             secret_key,
             public_key,
             key_derived: key_derived_arr,
@@ -218,10 +237,11 @@ impl RealmHandler {
         // Encrypted password
         data_1.put_slice(password_ciphertext);
 
-        trace!("Inner payload size: {} bytes", data_1.len());
-
         // Build header (8 bytes)
-        let payload_size = data_1.len() + 16; // +16 for outer tag
+        // Payload size = everything after the size field itself:
+        //   magic (4) + outer_tag (16) + encrypted_data (data_1.len() - 4) + tail (4)
+        //   = 4 + 16 + data_1.len() - 4 + 4 = 20 + data_1.len()
+        let payload_size = data_1.len() + 20;
         let mut header = BytesMut::with_capacity(8);
         header.put_u8(0x00); // CMD_AUTH_LOGON_CHALLENGE
         header.put_u8(8); // Protocol version
@@ -458,5 +478,104 @@ impl RealmHandler {
         String::from_utf8(bytes).map_err(|e| ProtocolError::InvalidString {
             message: e.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test AUTH_LOGON_CHALLENGE packet generation with known inputs.
+    ///
+    /// This test uses hardcoded secret key and nonce values to generate a deterministic
+    /// AUTH_LOGON_CHALLENGE packet, which can be compared against a known working packet
+    /// from a reference client.
+    ///
+    /// To use this test:
+    /// 1. Replace SECRET_KEY and NONCE with values captured from a working client
+    /// 2. Update ACCOUNT and PASSWORD to match what the working client used
+    /// 3. Run: cargo test -p innkeeper -- --nocapture
+    /// 4. Compare the hex output with your working client's packet
+    /// 5. Once verified, add the expected packet bytes to EXPECTED_PACKET
+    #[test]
+    fn test_logon_challenge_with_known_values() {
+        // Known inputs - REPLACE THESE WITH YOUR VALUES
+        // Note: This key should be clamped (last byte = 0x40)
+        const SECRET_KEY: [u8; 32] = hex_literal::hex!(
+            "00000000000000000000000000000000"
+            "00000000000000000000000000000040"
+        );
+        const NONCE: [u8; 12] = hex_literal::hex!("000000000000000000000000");
+        const ACCOUNT: &str = "testname";
+        const PASSWORD: &str = "testpassword";
+
+        // Expected packet - ADD YOUR EXPECTED PACKET HERE AFTER FIRST RUN
+        // Leave empty to see what this implementation generates
+        const EXPECTED_PACKET: [u8; 641] = hex_literal::hex!("00087d02fcf4f4e61c77e0f6322739d39dde1c5a0d8e789aad7d357018f176dfbea63e0c33295ffe7a3949551f401fc452ef1fd1a837c9558ec8cd8993ac39d2d4a79fd83c07ccba1f5bf36de9f5e20db7a310bd47bed150f3f3e01d836cc89af0f87710248d81daa1b6163ff88d194ae6c7a5856a5cfbcba3f5cd3f644bb97a7f412ceea511d8c58290ed83a41f909a0199e62b285434386b0a408dbf89b731a3404b23d173fee87d6cdd6634cdb0079437bc236cd1db346307b234f8ff6fc697c268de45178f8493f0b60f4ce4998f037f6bb385d178ac9e91dfe40aedc7007064d9d74dba5777776835c5001e774d9767e15cc5f8a2b9d51ac0baf584bf6902a4df54114d87238046d0aee0a32fa155f6868d197968c366cda47f0cfe0034173bb4d9bd170d072a2988b025358b470abae873d55cc31b9bae678fd0ab81c32acb0842b237219774c3a0c3f0c5a7c2c26ddf2c1ff33ffaa4dcaa2163229c2d8687eb5891902b8d5f131bb3c6cecc9c95a158199f8553f22138735ee7a96417a90e0cb7a96fd189aed18ba124720068b8b206f1f0b65d2a397778d15144cd4cf530a16bd2a46dd4e975c48d0ce6488d9bbaedbca73cce9dde67e5d95577c5341fa982a0f726b3fd581e77e355a9670ae88602312b124ecf9caf51a603500b15b8e1daf7c6895d143c56ac7757e8d8e9f258e42d8d0c40782dc714d750f56e36d51e28938921de162cbe7af586fcf32e5bb69f1af225d9b4a375a2ad2a8764bf429251c844710d4cea5a79c0929f25c702817475995cb8e453dcc1ac592aac3279c1fe8b57bca61990828e36dad7ed373e20e5d6cf688bf1974d5b4ef08fdf1714aefdbbd4d279f822b9759480cce5c6c63cd7acb66571d9c2c00ed32af40d1444");
+
+        // Create handler with known values
+        let handler = RealmHandler::from_keys(ACCOUNT, PASSWORD, SECRET_KEY, NONCE);
+
+        // Build the logon challenge packet
+        let packet = handler
+            .build_logon_challenge()
+            .expect("Failed to build logon challenge packet");
+
+        // Print packet for comparison
+        println!("\n========================================");
+        println!("AUTH_LOGON_CHALLENGE Packet ({} bytes)", packet.len());
+        println!("========================================");
+        print_hex_dump(&packet);
+        println!("========================================\n");
+
+        // If expected packet is provided, validate
+        if !EXPECTED_PACKET.is_empty() {
+            assert_eq!(
+                packet.len(),
+                EXPECTED_PACKET.len(),
+                "Packet length mismatch: got {}, expected {}",
+                packet.len(),
+                EXPECTED_PACKET.len()
+            );
+
+            for (i, (got, expected)) in packet.iter().zip(EXPECTED_PACKET.iter()).enumerate() {
+                assert_eq!(
+                    got, expected,
+                    "Byte mismatch at offset 0x{:04x}: got 0x{:02x}, expected 0x{:02x}",
+                    i, got, expected
+                );
+            }
+
+            println!("✓ Test PASSED - packet matches expected result!");
+        } else {
+            println!("⚠ No expected packet provided for comparison");
+            println!("  Compare the hex dump above with your working client's packet");
+            println!("  Then add the expected bytes to EXPECTED_PACKET constant\n");
+            panic!("Test incomplete - expected packet not provided for validation");
+        }
+    }
+
+    /// Helper to print hex dump in a readable format
+    fn print_hex_dump(data: &[u8]) {
+        for (i, chunk) in data.chunks(16).enumerate() {
+            print!("{:04x}: ", i * 16);
+            for byte in chunk {
+                print!("{:02x} ", byte);
+            }
+            // Pad if less than 16 bytes
+            for _ in 0..(16 - chunk.len()) {
+                print!("   ");
+            }
+            print!(" |");
+            for byte in chunk {
+                let c = if *byte >= 0x20 && *byte <= 0x7e {
+                    *byte as char
+                } else {
+                    '.'
+                };
+                print!("{}", c);
+            }
+            println!("|");
+        }
     }
 }
