@@ -15,7 +15,7 @@ use crate::protocol::packets::opcodes::{
 };
 use crate::protocol::packets::PacketDecode;
 use crate::protocol::realm::connector::RealmSession;
-use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, LoginVerifyWorld, Pong};
+use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, CharEnumRequest, LoginVerifyWorld, Pong};
 use crate::protocol::game::chat::SendChatMessage;
 use tokio_util::codec::{Framed, FramedParts};
 
@@ -81,7 +81,10 @@ impl GameClient {
                                 SMSG_AUTH_RESPONSE => {
                                     let response = AuthResponse::decode(&mut payload)?;
                                     if handler.handle_auth_response(response)? {
-                                        info!("Auth successful");
+                                        info!("Auth successful, requesting character list");
+                                        // Send CMSG_CHAR_ENUM to request character list
+                                        let char_enum_req = handler.build_char_enum_request();
+                                        connection.send(char_enum_req.into()).await?;
                                     } else {
                                         return Err("Game auth failed".into());
                                     }
@@ -359,7 +362,13 @@ mod tests {
         auth_response.push(2); // expansion (WotLK)
         server_stream.write_all(&auth_response).await.unwrap();
 
-        // 4. Send SMSG_CHAR_ENUM (0x003B)
+        // 4. Expect CMSG_CHAR_ENUM (0x0037) - client requests character list
+        let n = server_stream.read(&mut buf).await.unwrap();
+        assert!(n > 0);
+        let opcode = u16::from_le_bytes([buf[2], buf[3]]);
+        assert_eq!(opcode, 0x0037, "Expected CMSG_CHAR_ENUM");
+
+        // 5. Send SMSG_CHAR_ENUM (0x003B)
         // We need to send a character list containing "TestChar"
         // Payload: count(u8), [guid(u64), name(cstring), race(u8), class(u8), ...]
         let mut char_enum = Vec::new();
@@ -408,7 +417,7 @@ mod tests {
         char_enum.extend_from_slice(&payload);
         server_stream.write_all(&char_enum).await.unwrap();
 
-        // 5. Expect CMSG_PLAYER_LOGIN (0x003D)
+        // 6. Expect CMSG_PLAYER_LOGIN (0x003D)
         let n = server_stream.read(&mut buf).await.unwrap();
         assert!(n > 6);
         let opcode = u16::from_le_bytes([buf[2], buf[3]]);

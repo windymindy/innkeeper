@@ -10,8 +10,8 @@ pub mod packets;
 pub use connector::{new_game_connection, GameConnection};
 pub use handler::GameHandler;
 pub use packets::{
-    AuthChallenge, AuthResponse, AuthSession, CharEnum, CharacterInfo, LoginVerifyWorld, Ping,
-    PlayerLogin, Pong,
+    AuthChallenge, AuthResponse, AuthSession, CharEnum, CharEnumRequest, CharacterInfo,
+    LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 
 // Re-export chat types

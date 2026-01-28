@@ -16,8 +16,8 @@ use crate::protocol::game::guild::{
     GuildEventPacket, GuildQuery, GuildQueryResponse, GuildRoster, GuildRosterRequest,
 };
 use crate::protocol::game::packets::{
-    AuthChallenge, AuthResponse, AuthSession, CharEnum, CharacterInfo, LoginVerifyWorld, Ping,
-    PlayerLogin, Pong,
+    AuthChallenge, AuthResponse, AuthSession, CharEnum, CharEnumRequest, CharacterInfo,
+    LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 use crate::protocol::packets::PacketDecode;
 
@@ -101,12 +101,7 @@ impl GameHandler {
     /// Handle SMSG_AUTH_RESPONSE.
     pub fn handle_auth_response(&self, packet: AuthResponse) -> Result<bool, ProtocolError> {
         match packet {
-            AuthResponse::Success {
-                billing_time_remaining,
-                billing_flags,
-                billing_time_rested,
-                expansion,
-            } => {
+            AuthResponse::Success { .. } => {
                 info!("Game auth successful!");
                 Ok(true)
             }
@@ -115,6 +110,11 @@ impl GameHandler {
                 Ok(false)
             }
         }
+    }
+
+    /// Build CMSG_CHAR_ENUM request.
+    pub fn build_char_enum_request(&self) -> CharEnumRequest {
+        CharEnumRequest
     }
 
     /// Handle SMSG_CHAR_ENUM.

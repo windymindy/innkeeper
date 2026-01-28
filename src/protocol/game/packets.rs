@@ -373,3 +373,22 @@ impl PacketDecode for Pong {
         })
     }
 }
+
+/// CMSG_CHAR_ENUM request packet (empty payload).
+#[derive(Debug, Clone, Default)]
+pub struct CharEnumRequest;
+
+impl PacketEncode for CharEnumRequest {
+    fn encode(&self, _buf: &mut BytesMut) {
+        // Empty payload - just the opcode
+    }
+}
+
+impl From<CharEnumRequest> for crate::protocol::packets::Packet {
+    fn from(_req: CharEnumRequest) -> Self {
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_CHAR_ENUM,
+            bytes::Bytes::new(),
+        )
+    }
+}
