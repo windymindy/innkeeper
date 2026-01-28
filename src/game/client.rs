@@ -75,6 +75,8 @@ impl GameClient {
                                     let auth_session = handler.handle_auth_challenge(challenge)?;
                                     connection.send(auth_session.into()).await?;
                                     info!("Sent auth session");
+                                    // Initialize header crypt with session key after sending AUTH_SESSION
+                                    connection.codec_mut().init_crypt(&self.session.session_key);
                                 }
                                 SMSG_AUTH_RESPONSE => {
                                     let response = AuthResponse::decode(&mut payload)?;

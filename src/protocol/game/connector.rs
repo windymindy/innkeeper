@@ -17,6 +17,11 @@ impl GamePacketCodec {
     pub fn new(header_crypt: GameHeaderCrypt) -> Self {
         Self { header_crypt }
     }
+
+    /// Initialize header encryption with session key.
+    pub fn init_crypt(&mut self, session_key: &[u8]) {
+        self.header_crypt.init(session_key);
+    }
 }
 
 impl Decoder for GamePacketCodec {
@@ -74,25 +79,45 @@ impl Encoder<Packet> for GamePacketCodec {
     fn encode(&mut self, item: Packet, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let payload_len = item.payload.len();
 
-        // Client to Server header: 2 bytes size (BE), 4 bytes opcode (LE + 2 zero bytes)
-        let total_size = payload_len + 4;
+        // CMSG_AUTH_SESSION is never encrypted - it uses 4 byte header
+        // All other packets use 6 byte header (opcode + 2 zero bytes before encryption)
+        if !self.header_crypt.is_initialized() {
+            // Unencrypted: 2 bytes size (BE) + 2 bytes opcode (LE) + payload
+            let total_size = payload_len + 2; // size includes opcode but not size field itself
 
-        dst.reserve(2 + 4 + payload_len);
+            dst.reserve(4 + payload_len);
 
-        let mut header = [0u8; 6];
-        header[0] = (total_size >> 8) as u8;
-        header[1] = (total_size & 0xFF) as u8;
+            // Size (BE) - includes opcode (2 bytes) + payload
+            dst.put_u8((total_size >> 8) as u8);
+            dst.put_u8((total_size & 0xFF) as u8);
 
-        let opcode_bytes = item.opcode.to_le_bytes();
-        header[2] = opcode_bytes[0];
-        header[3] = opcode_bytes[1];
-        header[4] = 0;
-        header[5] = 0;
+            // Opcode (LE)
+            dst.put_u16_le(item.opcode);
 
-        self.header_crypt.encrypt(&mut header);
+            // Payload
+            dst.put_slice(&item.payload);
+        } else {
+            // Encrypted: 2 bytes size (BE) + 4 bytes opcode (LE + 2 zero bytes) + payload
+            // Then encrypt the 6 byte header
+            let total_size = payload_len + 4; // size includes opcode+zeros (4 bytes) but not size field itself
 
-        dst.put_slice(&header);
-        dst.put_slice(&item.payload);
+            dst.reserve(6 + payload_len);
+
+            let mut header = [0u8; 6];
+            header[0] = (total_size >> 8) as u8;
+            header[1] = (total_size & 0xFF) as u8;
+
+            let opcode_bytes = item.opcode.to_le_bytes();
+            header[2] = opcode_bytes[0];
+            header[3] = opcode_bytes[1];
+            header[4] = 0;
+            header[5] = 0;
+
+            self.header_crypt.encrypt(&mut header);
+
+            dst.put_slice(&header);
+            dst.put_slice(&item.payload);
+        }
 
         Ok(())
     }

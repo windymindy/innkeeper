@@ -107,10 +107,7 @@ impl GameHandler {
                 billing_time_rested,
                 expansion,
             } => {
-                info!(
-                    "Game auth successful! Billing: {}/{}/{}, Expansion: {}",
-                    billing_time_remaining, billing_flags, billing_time_rested, expansion
-                );
+                info!("Game auth successful!");
                 Ok(true)
             }
             AuthResponse::Failure(code) => {
