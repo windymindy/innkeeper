@@ -1,0 +1,96 @@
+# Innkeeper Configuration File
+# HOCON format (Human-Optimized Config Object Notation)
+# https://github.com/lightbend/config/blob/master/HOCON.md
+
+# Discord bot configuration
+discord {
+    # Your Discord bot token
+    # Get this from https://discord.com/developers/applications
+    token = "YOUR_DISCORD_TOKEN_HERE"
+
+    # Optional: Discord guild (server) ID to restrict the bot to
+    # guild_id = 123456789012345678
+
+    # Enable dot commands (messages starting with . are sent directly to WoW)
+    # Useful for WoW commands like .gm on, .tele, etc.
+    enable_dot_commands = true
+}
+
+# WoW connection configuration
+wow {
+    # Realm server connection
+    realm {
+        host = "logon.project-ascension.com"
+        port = 3724
+        # Must match the realm name exactly as shown in-game
+        name = "Laughing Skull"
+    }
+
+    # Account credentials
+    account {
+        username = "your_username"
+        password = "your_password"
+    }
+
+    # Character name to log in with
+    character = "YourCharacterName"
+}
+
+# Optional: Guild-specific configuration
+guild {
+    # Discord channel ID for guild online/offline notifications
+    # online_channel = 123456789012345678
+
+    # Discord channel ID for guild achievement announcements
+    # achievement_channel = 123456789012345678
+}
+
+# Chat channel mappings (WoW ↔ Discord)
+chat {
+    channels = [
+        {
+            # WoW channel: "guild", "officer", "say", "yell", "emote", or custom channel name
+            wow = "guild"
+
+            # Discord channel ID (right-click channel in Discord → Copy ID)
+            discord = 123456789012345678
+
+            # Optional: Message direction
+            # "both" (default), "wow_to_discord", "discord_to_wow"
+            direction = "both"
+
+            # Optional: Custom format for messages
+            # Available placeholders: %time, %user, %message, %channel
+            # format = "[%time] %user: %message"
+        }
+        {
+            wow = "officer"
+            discord = 234567890123456789
+            direction = "both"
+        }
+        {
+            # Custom channel example
+            wow = "world"
+            discord = 345678901234567890
+        }
+    ]
+}
+
+# Optional: Message filters (regex patterns)
+filters {
+    # Filter messages from WoW to Discord
+    # Messages matching these patterns will be dropped
+    wow_to_discord = [
+        # Example: Filter system messages
+        # "^\\[System\\].*"
+
+        # Example: Filter achievement spam
+        # ".*has earned the achievement.*"
+    ]
+
+    # Filter messages from Discord to WoW
+    discord_to_wow = [
+        # Example: Block URLs
+        # "https?://.*"
+    ]
+}

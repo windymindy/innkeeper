@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Discord-WoW chat bridge for Ascension private server"
 authors = ["Innkeeper Contributors"]
-license = "MIT"
 repository = "https://github.com/anomalyco/innkeeper"
 
 [dependencies]

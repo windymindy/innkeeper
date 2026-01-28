@@ -7,6 +7,7 @@
 //! - The main bridge orchestrator
 
 pub mod bridge;
+pub mod client;
 pub mod filter;
 pub mod formatter;
 pub mod router;
@@ -15,6 +16,7 @@ pub mod router;
 pub use bridge::{
     Bridge, BridgeChannels, BridgeCommand, DiscordMessage, OutgoingWowMessage, WowMessage,
 };
+pub use client::GameClient;
 pub use filter::MessageFilter;
 pub use formatter::{escape_discord_markdown, split_message, FormatContext, MessageFormatter};
 pub use router::{Direction, MessageRouter, Route, SharedRouter, WowChannel};

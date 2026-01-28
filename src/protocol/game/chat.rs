@@ -227,6 +227,18 @@ impl PacketEncode for SendChatMessage {
     }
 }
 
+impl From<SendChatMessage> for crate::protocol::packets::Packet {
+    fn from(msg: SendChatMessage) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        msg.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_MESSAGECHAT,
+            buf.freeze(),
+        )
+    }
+}
+
 /// CMSG_JOIN_CHANNEL packet.
 #[derive(Debug, Clone)]
 pub struct JoinChannel {
@@ -264,6 +276,18 @@ impl PacketEncode for JoinChannelWotLK {
         buf.put_slice(self.channel_name.as_bytes());
         buf.put_u8(0); // null terminator
         buf.put_u8(0); // password (empty)
+    }
+}
+
+impl From<JoinChannelWotLK> for crate::protocol::packets::Packet {
+    fn from(join: JoinChannelWotLK) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        join.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_JOIN_CHANNEL,
+            buf.freeze(),
+        )
     }
 }
 
@@ -349,6 +373,18 @@ pub struct NameQuery {
 impl PacketEncode for NameQuery {
     fn encode(&self, buf: &mut BytesMut) {
         buf.put_u64_le(self.guid);
+    }
+}
+
+impl From<NameQuery> for crate::protocol::packets::Packet {
+    fn from(query: NameQuery) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        query.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_NAME_QUERY,
+            buf.freeze(),
+        )
     }
 }
 

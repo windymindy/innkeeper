@@ -87,6 +87,18 @@ impl PacketEncode for AuthSession {
     }
 }
 
+impl From<AuthSession> for crate::protocol::packets::Packet {
+    fn from(auth: AuthSession) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        auth.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_AUTH_SESSION,
+            buf.freeze(),
+        )
+    }
+}
+
 /// SMSG_AUTH_RESPONSE packet.
 #[derive(Debug, Clone)]
 pub enum AuthResponse {
@@ -272,6 +284,18 @@ impl PacketEncode for PlayerLogin {
     }
 }
 
+impl From<PlayerLogin> for crate::protocol::packets::Packet {
+    fn from(login: PlayerLogin) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        login.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_PLAYER_LOGIN,
+            buf.freeze(),
+        )
+    }
+}
+
 /// SMSG_LOGIN_VERIFY_WORLD packet.
 #[derive(Debug, Clone)]
 pub struct LoginVerifyWorld {
@@ -313,6 +337,18 @@ impl PacketEncode for Ping {
     fn encode(&self, buf: &mut BytesMut) {
         buf.put_u32_le(self.sequence);
         buf.put_u32_le(self.latency);
+    }
+}
+
+impl From<Ping> for crate::protocol::packets::Packet {
+    fn from(ping: Ping) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        ping.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_PING,
+            buf.freeze(),
+        )
     }
 }
 

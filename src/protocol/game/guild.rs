@@ -122,6 +122,18 @@ impl PacketEncode for GuildQuery {
     }
 }
 
+impl From<GuildQuery> for crate::protocol::packets::Packet {
+    fn from(query: GuildQuery) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        query.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_GUILD_QUERY,
+            buf.freeze(),
+        )
+    }
+}
+
 /// CMSG_GUILD_ROSTER packet (empty payload).
 #[derive(Debug, Clone)]
 pub struct GuildRosterRequest;
@@ -129,6 +141,14 @@ pub struct GuildRosterRequest;
 impl PacketEncode for GuildRosterRequest {
     fn encode(&self, _buf: &mut BytesMut) {
         // Empty packet
+    }
+}
+
+impl From<GuildRosterRequest> for crate::protocol::packets::Packet {
+    fn from(_req: GuildRosterRequest) -> Self {
+        crate::protocol::packets::Packet::empty(
+            crate::protocol::packets::opcodes::CMSG_GUILD_ROSTER,
+        )
     }
 }
 
