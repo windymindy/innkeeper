@@ -413,7 +413,7 @@ impl RealmHandler {
 
         let _size = buf.get_u16_le();
         let _unknown = buf.get_u32_le();
-        let realm_count = buf.get_u8();
+        let realm_count = buf.get_u16_le(); // TBC/WotLK uses u16, not u8
 
         debug!("Realm count: {}", realm_count);
 
@@ -424,7 +424,9 @@ impl RealmHandler {
                 break;
             }
 
-            let realm_type = buf.get_u32_le();
+            // TBC/WotLK format: realm_type (1 byte) + lock_flag (1 byte) + flags (1 byte)
+            let realm_type = buf.get_u8();
+            let _lock_flag = buf.get_u8();
             let flags = buf.get_u8();
 
             // Read null-terminated name
@@ -442,6 +444,13 @@ impl RealmHandler {
             let _timezone = buf.get_u8();
             let id = buf.get_u8();
 
+            // TBC/WotLK: Skip build information if present (flags & 0x04)
+            if (flags & 0x04) == 0x04 {
+                if buf.remaining() >= 5 {
+                    buf.advance(5); // Skip 5 bytes of build info
+                }
+            }
+
             debug!(
                 "Realm: {} at {} (id={}, type={}, flags={})",
                 name, address, id, realm_type, flags
@@ -451,7 +460,7 @@ impl RealmHandler {
                 id,
                 name,
                 address,
-                realm_type: realm_type as u8,
+                realm_type,
                 flags,
                 characters,
             });
