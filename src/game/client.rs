@@ -182,7 +182,17 @@ impl GameClient {
                                 SMSG_GUILD_EVENT => {
                                     if let Some(notification) = handler.handle_guild_event(payload)? {
                                         info!("Guild event: {}", notification);
-                                        // TODO: Send to Discord
+                                        // Send guild event as a WowMessage to Discord (system message)
+                                        let wow_msg = WowMessage {
+                                            sender: None, // System message
+                                            content: notification,
+                                            chat_type: 0x12, // CHAT_MSG_GUILD (same type as guild chat)
+                                            channel_name: None,
+                                            format: Some("**Guild Event**: %message".to_string()),
+                                        };
+                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                            warn!("Failed to send guild event to bridge: {}", e);
+                                        }
                                     }
                                 }
                                 SMSG_PONG => {
@@ -222,19 +232,33 @@ impl GameClient {
                 }
                 // Commands from Discord (!who, !gmotd)
                 Some(command) = self.channels.command_rx.recv() => {
-                    use crate::game::bridge::BridgeCommand;
+                    use crate::game::bridge::{BridgeCommand, CommandResponse};
                     match command {
-                        BridgeCommand::Who => {
+                        BridgeCommand::Who { reply_channel } => {
                             let response = handler.get_online_guildies();
-                            info!("!who command: {}", response);
-                            // TODO: Send response back to Discord
+                            info!("!who command (channel {}): {}", reply_channel, response);
+                            // Send response back to Discord
+                            let cmd_response = CommandResponse {
+                                channel_id: reply_channel,
+                                content: response,
+                            };
+                            if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
+                                warn!("Failed to send !who response to bridge: {}", e);
+                            }
                         }
-                        BridgeCommand::Gmotd => {
+                        BridgeCommand::Gmotd { reply_channel } => {
                             let response = handler.get_guild_motd()
                                 .map(|s| s.to_string())
                                 .unwrap_or_else(|| "No MOTD set.".to_string());
-                            info!("!gmotd command: {}", response);
-                            // TODO: Send response back to Discord
+                            info!("!gmotd command (channel {}): {}", reply_channel, response);
+                            // Send response back to Discord
+                            let cmd_response = CommandResponse {
+                                channel_id: reply_channel,
+                                content: response,
+                            };
+                            if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
+                                warn!("Failed to send !gmotd response to bridge: {}", e);
+                            }
                         }
                     }
                 }

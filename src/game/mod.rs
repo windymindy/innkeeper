@@ -14,7 +14,7 @@ pub mod router;
 
 // Re-export commonly used types
 pub use bridge::{
-    Bridge, BridgeChannels, BridgeCommand, DiscordMessage, OutgoingWowMessage, WowMessage,
+    Bridge, BridgeChannels, BridgeCommand, CommandResponse, DiscordMessage, OutgoingWowMessage, WowMessage,
 };
 pub use client::GameClient;
 pub use filter::MessageFilter;

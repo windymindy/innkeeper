@@ -46,9 +46,18 @@ pub struct DiscordMessage {
 #[derive(Debug, Clone)]
 pub enum BridgeCommand {
     /// Request guild roster (online guildies).
-    Who,
+    Who { reply_channel: u64 },
     /// Request guild MOTD.
-    Gmotd,
+    Gmotd { reply_channel: u64 },
+}
+
+/// Command response to be sent to Discord.
+#[derive(Debug, Clone)]
+pub struct CommandResponse {
+    /// The Discord channel ID to send the response to.
+    pub channel_id: u64,
+    /// The response content.
+    pub content: String,
 }
 
 /// Message to send to WoW game handler.
@@ -82,6 +91,10 @@ pub struct BridgeChannels {
     pub command_tx: mpsc::UnboundedSender<BridgeCommand>,
     /// Receiver for commands (game handler listens).
     pub command_rx: mpsc::UnboundedReceiver<BridgeCommand>,
+    /// Sender for command responses (game handler sends, bridge receives).
+    pub command_response_tx: mpsc::UnboundedSender<CommandResponse>,
+    /// Receiver for command responses (bridge listens).
+    pub command_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
 }
 
 impl BridgeChannels {
@@ -91,6 +104,7 @@ impl BridgeChannels {
         let (discord_tx, discord_rx) = mpsc::unbounded_channel();
         let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
 
         Self {
             wow_tx,
@@ -101,6 +115,8 @@ impl BridgeChannels {
             outgoing_wow_rx,
             command_tx,
             command_rx,
+            command_response_tx,
+            command_response_rx,
         }
     }
 }
@@ -350,6 +366,28 @@ pub async fn run_discord_to_wow_loop(
     }
 
     warn!("Discord -> WoW message loop ended");
+}
+
+/// Run the command response loop (sends command responses to Discord).
+pub async fn run_command_response_loop(
+    mut response_rx: mpsc::UnboundedReceiver<CommandResponse>,
+    http: Arc<Http>,
+) {
+    info!("Starting command response loop");
+
+    while let Some(response) = response_rx.recv().await {
+        let channel_id = ChannelId::new(response.channel_id);
+        
+        if let Err(e) = channel_id.say(&http, &response.content).await {
+            error!(
+                channel_id = response.channel_id,
+                error = %e,
+                "Failed to send command response to Discord"
+            );
+        }
+    }
+
+    warn!("Command response loop ended");
 }
 
 #[cfg(test)]
