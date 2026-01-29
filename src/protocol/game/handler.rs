@@ -102,7 +102,7 @@ impl GameHandler {
     pub fn handle_auth_response(&self, packet: AuthResponse) -> Result<bool, ProtocolError> {
         match packet {
             AuthResponse::Success { .. } => {
-                info!("Game auth successful!");
+                debug!("Game auth successful!");
                 Ok(true)
             }
             AuthResponse::Failure(code) => {
@@ -185,7 +185,14 @@ impl GameHandler {
         &mut self,
         mut payload: Bytes,
     ) -> Result<Option<ChatMessage>, ProtocolError> {
-        let msg = MessageChat::decode(&mut payload)?;
+        let msg = match MessageChat::decode(&mut payload) {
+            Ok(msg) => msg,
+            Err(ProtocolError::InvalidPacket { message }) if message == "Addon message" => {
+                // Addon messages are internal addon communication, not real chat - skip them
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
 
         // Ignore messages from self (except system messages)
         if let Some(self_guid) = self.self_guid {
@@ -302,7 +309,7 @@ impl GameHandler {
     /// Handle SMSG_GUILD_QUERY response.
     pub fn handle_guild_query(&mut self, mut payload: Bytes) -> Result<(), ProtocolError> {
         let response = GuildQueryResponse::decode(&mut payload)?;
-        info!(
+        debug!(
             "Guild info received: {} ({} ranks)",
             response.name,
             response.ranks.len()
@@ -315,7 +322,7 @@ impl GameHandler {
     pub fn handle_guild_roster(&mut self, mut payload: Bytes) -> Result<(), ProtocolError> {
         let roster = GuildRoster::decode(&mut payload)?;
 
-        info!(
+        debug!(
             "Guild roster received: {} members, MOTD: {}",
             roster.members.len(),
             if roster.motd.is_empty() {
@@ -374,7 +381,7 @@ impl GameHandler {
         // Format notification
         let notification = event.format_notification();
         if let Some(ref msg) = notification {
-            info!("Guild event: {}", msg);
+            debug!("Guild event: {}", msg);
         }
 
         Ok(notification)
