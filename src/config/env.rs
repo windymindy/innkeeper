@@ -1,140 +1,177 @@
 //! Environment variable overrides for configuration.
 //!
-//! Supports overriding config values with environment variables:
-//! - `INNKEEPER_DISCORD_TOKEN` - Discord bot token
-//! - `INNKEEPER_WOW_USERNAME` - WoW account username
-//! - `INNKEEPER_WOW_PASSWORD` - WoW account password
-//! - `INNKEEPER_WOW_CHARACTER` - Character name
-//! - `INNKEEPER_REALM_HOST` - Realm server host
-//! - `INNKEEPER_REALM_PORT` - Realm server port
-//! - `INNKEEPER_REALM_NAME` - Realm name to connect to
+//! Supports overriding config values with environment variables (wowchat style):
+//! - `DISCORD_TOKEN` - Discord bot token
+//! - `WOW_ACCOUNT` - WoW account username
+//! - `WOW_PASSWORD` - WoW account password
+//! - `WOW_CHARACTER` - Character name
+//!
+//! Note: The HOCON parser handles `${?VAR}` syntax automatically.
+//! This module provides additional fallback support.
 
 use std::env;
 
 use crate::config::types::Config;
 
-/// Environment variable prefix for all config overrides.
-const ENV_PREFIX: &str = "INNKEEPER";
-
 /// Apply environment variable overrides to a config.
 ///
-/// This allows sensitive values like tokens and passwords to be
-/// provided via environment variables instead of the config file.
+/// This provides environment variable support:
+/// - DISCORD_TOKEN
+/// - WOW_ACCOUNT
+/// - WOW_PASSWORD
+/// - WOW_CHARACTER
+///
+/// These are applied after HOCON parsing, so they override any values
+/// that weren't set via HOCON's ${?VAR} syntax.
 pub fn apply_env_overrides(mut config: Config) -> Config {
-    // Discord token
-    if let Ok(token) = env::var(format!("{}_DISCORD_TOKEN", ENV_PREFIX)) {
-        config.discord.token = token;
-    }
-
-    // WoW credentials
-    if let Ok(username) = env::var(format!("{}_WOW_USERNAME", ENV_PREFIX)) {
-        config.wow.account.username = username;
-    }
-    if let Ok(password) = env::var(format!("{}_WOW_PASSWORD", ENV_PREFIX)) {
-        config.wow.account.password = password;
-    }
-    if let Ok(character) = env::var(format!("{}_WOW_CHARACTER", ENV_PREFIX)) {
-        config.wow.character = character;
-    }
-
-    // Realm settings
-    if let Ok(host) = env::var(format!("{}_REALM_HOST", ENV_PREFIX)) {
-        config.wow.realm.host = host;
-    }
-    if let Ok(port) = env::var(format!("{}_REALM_PORT", ENV_PREFIX)) {
-        if let Ok(port) = port.parse() {
-            config.wow.realm.port = port;
+    // Discord token (only if not already set)
+    if config.discord.token.is_none() || config.discord.token.as_ref().unwrap().is_empty() {
+        if let Ok(token) = env::var("DISCORD_TOKEN") {
+            if !token.is_empty() {
+                config.discord.token = Some(token);
+            }
         }
     }
-    if let Ok(name) = env::var(format!("{}_REALM_NAME", ENV_PREFIX)) {
-        config.wow.realm.name = name;
+
+    // WoW credentials (only if not already set)
+    if config.wow.account.is_empty() {
+        if let Ok(account) = env::var("WOW_ACCOUNT") {
+            if !account.is_empty() {
+                config.wow.account = account;
+            }
+        }
     }
 
-    // Discord guild ID
-    if let Ok(guild_id) = env::var(format!("{}_DISCORD_GUILD_ID", ENV_PREFIX)) {
-        if let Ok(id) = guild_id.parse() {
-            config.discord.guild_id = Some(id);
+    if config.wow.password.is_empty() {
+        if let Ok(password) = env::var("WOW_PASSWORD") {
+            if !password.is_empty() {
+                config.wow.password = password;
+            }
+        }
+    }
+
+    if let Ok(character) = env::var("WOW_CHARACTER") {
+        if !character.is_empty() {
+            config.wow.character = character;
         }
     }
 
     config
 }
 
-/// Check if any required environment variables are set but empty.
+/// Check if required configuration values are present.
 ///
-/// Returns a list of variable names that are set but empty.
-pub fn check_empty_env_vars() -> Vec<String> {
-    let vars = [
-        format!("{}_DISCORD_TOKEN", ENV_PREFIX),
-        format!("{}_WOW_USERNAME", ENV_PREFIX),
-        format!("{}_WOW_PASSWORD", ENV_PREFIX),
-    ];
+/// Returns a list of missing required fields.
+pub fn check_missing_required(config: &Config) -> Vec<String> {
+    let mut missing = Vec::new();
 
-    vars.into_iter()
-        .filter(|var| env::var(var).map(|v| v.is_empty()).unwrap_or(false))
-        .collect()
+    // Check Discord token
+    let has_token = config
+        .discord
+        .token
+        .as_ref()
+        .map(|t| !t.is_empty())
+        .unwrap_or(false);
+    if !has_token {
+        missing.push("discord.token (or DISCORD_TOKEN env var)".to_string());
+    }
+
+    // Check WoW credentials
+    if config.wow.account.is_empty() {
+        missing.push("wow.account (or WOW_ACCOUNT env var)".to_string());
+    }
+
+    if config.wow.password.is_empty() {
+        missing.push("wow.password (or WOW_PASSWORD env var)".to_string());
+    }
+
+    if config.wow.character.is_empty() {
+        missing.push("wow.character (or WOW_CHARACTER env var)".to_string());
+    }
+
+    if config.wow.realmlist.is_empty() {
+        missing.push("wow.realmlist".to_string());
+    }
+
+    if config.wow.realm.is_empty() {
+        missing.push("wow.realm".to_string());
+    }
+
+    missing
 }
 
 /// Get the config file path from environment or use default.
 ///
-/// Checks `INNKEEPER_CONFIG` environment variable, otherwise returns "innkeeper.conf".
+/// Checks `INNKEEPER_CONFIG` or `WOWCHAT_CONFIG` environment variable,
+/// otherwise returns "innkeeper.conf".
 pub fn get_config_path() -> String {
-    env::var(format!("{}_CONFIG", ENV_PREFIX)).unwrap_or_else(|_| "innkeeper.conf".to_string())
+    env::var("INNKEEPER_CONFIG")
+        .or_else(|_| env::var("WOWCHAT_CONFIG"))
+        .unwrap_or_else(|_| "innkeeper.conf".to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::ChatConfig;
+    use crate::config::types::GuildDashboardConfig;
     use crate::config::types::*;
 
     fn make_test_config() -> Config {
         Config {
+            discord: DiscordConfig {
+                token: Some("original_token".to_string()),
+                enable_dot_commands: false,
+                dot_commands_whitelist: None,
+                enable_commands_channels: None,
+                enable_tag_failed_notifications: false,
+            },
             wow: WowConfig {
-                realm: RealmConfig {
-                    host: "localhost".to_string(),
-                    port: 3724,
-                    name: "Test".to_string(),
-                },
-                account: AccountConfig {
-                    username: "test".to_string(),
-                    password: "test".to_string(),
-                },
+                platform: "Mac".to_string(),
+                enable_server_motd: false,
+                version: "3.3.5".to_string(),
+                realm_build: None,
+                game_build: None,
+                realmlist: "localhost".to_string(),
+                realm: "Test".to_string(),
+                account: "test".to_string(),
+                password: "test".to_string(),
                 character: "TestChar".to_string(),
             },
-            discord: DiscordConfig {
-                token: "original_token".to_string(),
-                guild_id: None,
-                enable_dot_commands: None,
-            },
-            guild: None,
-            chat: None,
+            guild: GuildEventsConfig::default(),
+            chat: ChatConfig::default(),
             filters: None,
+            guild_dashboard: GuildDashboardConfig::default(),
+            quirks: QuirksConfig::default(),
         }
     }
 
     #[test]
-    fn test_env_prefix() {
-        assert_eq!(ENV_PREFIX, "INNKEEPER");
-    }
-
-    #[test]
     fn test_get_config_path_default() {
-        // Clear the env var first
+        // Clear the env vars first
         env::remove_var("INNKEEPER_CONFIG");
+        env::remove_var("WOWCHAT_CONFIG");
         assert_eq!(get_config_path(), "innkeeper.conf");
     }
 
     #[test]
     fn test_apply_env_overrides_no_vars() {
         // Clear all relevant env vars
-        env::remove_var("INNKEEPER_DISCORD_TOKEN");
-        env::remove_var("INNKEEPER_WOW_USERNAME");
+        env::remove_var("DISCORD_TOKEN");
+        env::remove_var("WOW_ACCOUNT");
 
         let config = make_test_config();
         let result = apply_env_overrides(config);
 
         // Should remain unchanged
-        assert_eq!(result.discord.token, "original_token");
-        assert_eq!(result.wow.account.username, "test");
+        assert_eq!(result.discord.token, Some("original_token".to_string()));
+        assert_eq!(result.wow.account, "test".to_string());
+    }
+
+    #[test]
+    fn test_check_missing_required() {
+        let config = make_test_config();
+        let missing = check_missing_required(&config);
+        assert!(missing.is_empty(), "Should have all required fields");
     }
 }

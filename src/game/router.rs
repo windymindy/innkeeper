@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serenity::all::ChannelId;
 
-use crate::config::types::{ChannelMapping, ChatConfig};
+use crate::config::types::{ChannelMapping, ChatConfig, WowChannelConfig};
 use crate::protocol::game::chat::chat_events;
 
 /// Direction of message flow.
@@ -84,6 +84,37 @@ impl WowChannel {
         }
     }
 
+    /// Parse a WoW channel from WowChannelConfig.
+    pub fn from_channel_config(config: &WowChannelConfig) -> Self {
+        match config.channel_type.to_lowercase().as_str() {
+            "guild" => WowChannel::Guild,
+            "officer" => WowChannel::Officer,
+            "say" => WowChannel::Say,
+            "yell" => WowChannel::Yell,
+            "emote" => WowChannel::Emote,
+            "whisper" => WowChannel::Whisper,
+            "system" => WowChannel::System,
+            "achievement" => WowChannel::Achievement,
+            "guild_achievement" => WowChannel::GuildAchievement,
+            "channel" => {
+                // For custom channels, use the channel name if provided
+                if let Some(ref name) = config.channel {
+                    WowChannel::Custom(name.clone())
+                } else {
+                    WowChannel::Custom("Unknown".to_string())
+                }
+            }
+            _ => {
+                // For unknown types, use channel name if available
+                if let Some(ref name) = config.channel {
+                    WowChannel::Custom(name.clone())
+                } else {
+                    WowChannel::Custom(config.channel_type.clone())
+                }
+            }
+        }
+    }
+
     /// Get the chat message type byte for this channel.
     pub fn to_chat_type(&self) -> u8 {
         match self {
@@ -139,12 +170,14 @@ impl WowChannel {
 pub struct Route {
     /// WoW channel.
     pub wow_channel: WowChannel,
-    /// Discord channel ID.
-    pub discord_channel: ChannelId,
+    /// Discord channel name.
+    pub discord_channel_name: String,
     /// Message flow direction.
     pub direction: Direction,
-    /// Optional custom format string.
-    pub format: Option<String>,
+    /// Format string for messages from WoW (Discord side).
+    pub wow_to_discord_format: Option<String>,
+    /// Format string for messages from Discord (WoW side).
+    pub discord_to_wow_format: Option<String>,
 }
 
 /// Message router that handles channel mappings.
@@ -154,8 +187,8 @@ pub struct MessageRouter {
     routes: Vec<Route>,
     /// Index: WoW channel -> Discord channels (for WoW -> Discord routing).
     wow_to_discord: HashMap<WowChannelKey, Vec<usize>>,
-    /// Index: Discord channel ID -> routes (for Discord -> WoW routing).
-    discord_to_wow: HashMap<ChannelId, Vec<usize>>,
+    /// Index: Discord channel name -> routes (for Discord -> WoW routing).
+    discord_to_wow: HashMap<String, Vec<usize>>,
 }
 
 /// Key for WoW channel lookups (handles custom channel names).
@@ -179,18 +212,15 @@ impl MessageRouter {
     pub fn from_config(config: &ChatConfig) -> Self {
         let mut routes = Vec::new();
         let mut wow_to_discord: HashMap<WowChannelKey, Vec<usize>> = HashMap::new();
-        let mut discord_to_wow: HashMap<ChannelId, Vec<usize>> = HashMap::new();
+        let mut discord_to_wow: HashMap<String, Vec<usize>> = HashMap::new();
 
         for mapping in &config.channels {
             let route = Route {
-                wow_channel: WowChannel::from_config(&mapping.wow),
-                discord_channel: ChannelId::new(mapping.discord),
-                direction: mapping
-                    .direction
-                    .as_ref()
-                    .map(|s| Direction::from_str(s))
-                    .unwrap_or(Direction::Both),
-                format: mapping.format.clone(),
+                wow_channel: WowChannel::from_channel_config(&mapping.wow),
+                discord_channel_name: mapping.discord.channel.clone(),
+                direction: Direction::from_str(&mapping.direction),
+                wow_to_discord_format: mapping.wow.format.clone(),
+                discord_to_wow_format: mapping.discord.format.clone(),
             };
 
             let idx = routes.len();
@@ -205,7 +235,7 @@ impl MessageRouter {
             // Build Discord -> WoW index
             if route.direction.allows_discord_to_wow() {
                 discord_to_wow
-                    .entry(route.discord_channel)
+                    .entry(route.discord_channel_name.clone())
                     .or_default()
                     .push(idx);
             }
@@ -241,16 +271,16 @@ impl MessageRouter {
     }
 
     /// Get WoW channels that should receive a message from the given Discord channel.
-    pub fn get_wow_targets(&self, discord_channel: ChannelId) -> Vec<&Route> {
+    pub fn get_wow_targets(&self, discord_channel_name: &str) -> Vec<&Route> {
         self.discord_to_wow
-            .get(&discord_channel)
+            .get(discord_channel_name)
             .map(|indices| indices.iter().map(|&i| &self.routes[i]).collect())
             .unwrap_or_default()
     }
 
     /// Check if a Discord channel is mapped for sending to WoW.
-    pub fn has_discord_mapping(&self, discord_channel: ChannelId) -> bool {
-        self.discord_to_wow.contains_key(&discord_channel)
+    pub fn has_discord_mapping(&self, discord_channel_name: &str) -> bool {
+        self.discord_to_wow.contains_key(discord_channel_name)
     }
 
     /// Check if a WoW channel is mapped for sending to Discord.
@@ -282,6 +312,7 @@ pub type SharedRouter = Arc<MessageRouter>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::{DiscordChannelConfig, WowChannelConfig};
 
     fn make_config(channels: Vec<ChannelMapping>) -> ChatConfig {
         ChatConfig { channels }
@@ -315,30 +346,42 @@ mod tests {
     #[test]
     fn test_router_wow_to_discord() {
         let config = make_config(vec![ChannelMapping {
-            wow: "guild".to_string(),
-            discord: 123456789,
-            direction: Some("both".to_string()),
-            format: None,
+            direction: "both".to_string(),
+            wow: WowChannelConfig {
+                channel_type: "Guild".to_string(),
+                channel: None,
+                format: None,
+            },
+            discord: DiscordChannelConfig {
+                channel: "guild-chat".to_string(),
+                format: None,
+            },
         }]);
 
         let router = MessageRouter::from_config(&config);
         let targets = router.get_discord_targets(chat_events::CHAT_MSG_GUILD, None);
 
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].discord_channel, ChannelId::new(123456789));
+        assert_eq!(targets[0].discord_channel_name, "guild-chat");
     }
 
     #[test]
     fn test_router_discord_to_wow() {
         let config = make_config(vec![ChannelMapping {
-            wow: "officer".to_string(),
-            discord: 987654321,
-            direction: None, // defaults to Both
-            format: None,
+            direction: "both".to_string(),
+            wow: WowChannelConfig {
+                channel_type: "Officer".to_string(),
+                channel: None,
+                format: None,
+            },
+            discord: DiscordChannelConfig {
+                channel: "officer-chat".to_string(),
+                format: None,
+            },
         }]);
 
         let router = MessageRouter::from_config(&config);
-        let targets = router.get_wow_targets(ChannelId::new(987654321));
+        let targets = router.get_wow_targets("officer-chat");
 
         assert_eq!(targets.len(), 1);
         assert!(matches!(targets[0].wow_channel, WowChannel::Officer));
@@ -347,10 +390,16 @@ mod tests {
     #[test]
     fn test_router_direction_filtering() {
         let config = make_config(vec![ChannelMapping {
-            wow: "guild".to_string(),
-            discord: 111,
-            direction: Some("wow_to_discord".to_string()),
-            format: None,
+            direction: "wow_to_discord".to_string(),
+            wow: WowChannelConfig {
+                channel_type: "Guild".to_string(),
+                channel: None,
+                format: None,
+            },
+            discord: DiscordChannelConfig {
+                channel: "guild-chat".to_string(),
+                format: None,
+            },
         }]);
 
         let router = MessageRouter::from_config(&config);
@@ -360,17 +409,23 @@ mod tests {
         assert_eq!(wow_targets.len(), 1);
 
         // Should NOT have Discord -> WoW route
-        let discord_targets = router.get_wow_targets(ChannelId::new(111));
+        let discord_targets = router.get_wow_targets("guild-chat");
         assert_eq!(discord_targets.len(), 0);
     }
 
     #[test]
     fn test_custom_channel_routing() {
         let config = make_config(vec![ChannelMapping {
-            wow: "World".to_string(),
-            discord: 555,
-            direction: None,
-            format: None,
+            direction: "both".to_string(),
+            wow: WowChannelConfig {
+                channel_type: "Channel".to_string(),
+                channel: Some("World".to_string()),
+                format: None,
+            },
+            discord: DiscordChannelConfig {
+                channel: "world-chat".to_string(),
+                format: None,
+            },
         }]);
 
         let router = MessageRouter::from_config(&config);
@@ -392,22 +447,40 @@ mod tests {
     fn test_get_channels_to_join() {
         let config = make_config(vec![
             ChannelMapping {
-                wow: "guild".to_string(),
-                discord: 1,
-                direction: None,
-                format: None,
+                direction: "both".to_string(),
+                wow: WowChannelConfig {
+                    channel_type: "Guild".to_string(),
+                    channel: None,
+                    format: None,
+                },
+                discord: DiscordChannelConfig {
+                    channel: "guild-chat".to_string(),
+                    format: None,
+                },
             },
             ChannelMapping {
-                wow: "World".to_string(),
-                discord: 2,
-                direction: None,
-                format: None,
+                direction: "both".to_string(),
+                wow: WowChannelConfig {
+                    channel_type: "Channel".to_string(),
+                    channel: Some("World".to_string()),
+                    format: None,
+                },
+                discord: DiscordChannelConfig {
+                    channel: "world-chat".to_string(),
+                    format: None,
+                },
             },
             ChannelMapping {
-                wow: "Trade".to_string(),
-                discord: 3,
-                direction: None,
-                format: None,
+                direction: "both".to_string(),
+                wow: WowChannelConfig {
+                    channel_type: "Channel".to_string(),
+                    channel: Some("Trade".to_string()),
+                    format: None,
+                },
+                discord: DiscordChannelConfig {
+                    channel: "trade-chat".to_string(),
+                    format: None,
+                },
             },
         ]);
 
@@ -423,16 +496,28 @@ mod tests {
     fn test_multiple_discord_channels() {
         let config = make_config(vec![
             ChannelMapping {
-                wow: "guild".to_string(),
-                discord: 100,
-                direction: None,
-                format: None,
+                direction: "both".to_string(),
+                wow: WowChannelConfig {
+                    channel_type: "Guild".to_string(),
+                    channel: None,
+                    format: None,
+                },
+                discord: DiscordChannelConfig {
+                    channel: "guild-chat-1".to_string(),
+                    format: None,
+                },
             },
             ChannelMapping {
-                wow: "guild".to_string(),
-                discord: 200,
-                direction: None,
-                format: None,
+                direction: "both".to_string(),
+                wow: WowChannelConfig {
+                    channel_type: "Guild".to_string(),
+                    channel: None,
+                    format: None,
+                },
+                discord: DiscordChannelConfig {
+                    channel: "guild-chat-2".to_string(),
+                    format: None,
+                },
             },
         ]);
 

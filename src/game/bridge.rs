@@ -5,14 +5,14 @@
 use std::sync::Arc;
 
 use serenity::all::{ChannelId, Http};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::config::types::Config;
 use crate::discord::resolver::MessageResolver;
 use crate::game::filter::MessageFilter;
 use crate::game::formatter::{escape_discord_markdown, split_message, FormatContext, MessageFormatter};
-use crate::game::router::{MessageRouter, SharedRouter, WowChannel};
+use crate::game::router::{MessageRouter, SharedRouter};
 
 /// Message from WoW to be sent to Discord.
 #[derive(Debug, Clone)]
@@ -127,6 +127,9 @@ impl Default for BridgeChannels {
     }
 }
 
+/// Discord channel resolver function type.
+pub type ChannelResolver = Arc<dyn Fn(&str) -> Option<ChannelId> + Send + Sync>;
+
 /// The main bridge that orchestrates message flow.
 pub struct Bridge {
     /// Message router.
@@ -137,37 +140,47 @@ pub struct Bridge {
     resolver: Arc<MessageResolver>,
     /// Whether dot commands are enabled.
     enable_dot_commands: bool,
+    /// Channel name resolver (set by Discord module).
+    channel_resolver: Option<ChannelResolver>,
 }
 
 impl Bridge {
     /// Create a new bridge from configuration.
     pub fn new(config: &Config) -> Self {
-        let router = if let Some(ref chat_config) = config.chat {
-            Arc::new(MessageRouter::from_config(chat_config))
-        } else {
+        let router = if config.chat.channels.is_empty() {
             Arc::new(MessageRouter::empty())
+        } else {
+            Arc::new(MessageRouter::from_config(&config.chat))
         };
 
         let filter = if let Some(ref filters) = config.filters {
-            Arc::new(MessageFilter::new(
-                filters.wow_to_discord.clone(),
-                filters.discord_to_wow.clone(),
-            ))
+            let enabled = filters.enabled;
+            if enabled {
+                Arc::new(MessageFilter::new(
+                    filters.patterns.clone(),
+                    filters.patterns.clone(),
+                ))
+            } else {
+                Arc::new(MessageFilter::empty())
+            }
         } else {
             Arc::new(MessageFilter::empty())
         };
 
-        let enable_dot_commands = config
-            .discord
-            .enable_dot_commands
-            .unwrap_or(false);
+        let enable_dot_commands = config.discord.enable_dot_commands;
 
         Self {
             router,
             filter,
             resolver: Arc::new(MessageResolver::new()),
             enable_dot_commands,
+            channel_resolver: None,
         }
+    }
+
+    /// Set the channel resolver for looking up Discord channel IDs by name.
+    pub fn set_channel_resolver(&mut self, resolver: ChannelResolver) {
+        self.channel_resolver = Some(resolver);
     }
 
     /// Get the router for external use.
@@ -212,9 +225,26 @@ impl Bridge {
         };
 
         for route in routes {
+            // Resolve Discord channel name to ID
+            let channel_id = if let Some(ref resolver) = self.channel_resolver {
+                match resolver(&route.discord_channel_name) {
+                    Some(id) => id,
+                    None => {
+                        warn!(
+                            channel_name = route.discord_channel_name,
+                            "Could not resolve Discord channel name to ID"
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                warn!("No channel resolver set, cannot send to Discord");
+                continue;
+            };
+
             // Use route's format or message's format override
             let format = msg.format.as_ref()
-                .or(route.format.as_ref())
+                .or(route.wow_to_discord_format.as_ref())
                 .cloned()
                 .unwrap_or_else(|| "[%user]: %message".to_string());
 
@@ -230,7 +260,7 @@ impl Bridge {
             // Apply filter
             if self.filter.should_filter_wow_to_discord(&formatted) {
                 info!(
-                    channel_id = route.discord_channel.get(),
+                    channel_name = route.discord_channel_name,
                     "FILTERED WoW->Discord: {}",
                     formatted
                 );
@@ -238,14 +268,14 @@ impl Bridge {
             }
 
             info!(
-                channel_id = route.discord_channel.get(),
+                channel_name = route.discord_channel_name,
                 "WoW->Discord: {}",
                 formatted
             );
 
-            if let Err(e) = route.discord_channel.say(http, &formatted).await {
+            if let Err(e) = channel_id.say(http, &formatted).await {
                 error!(
-                    channel_id = route.discord_channel.get(),
+                    channel_name = route.discord_channel_name,
                     error = %e,
                     "Failed to send message to Discord"
                 );
@@ -260,12 +290,11 @@ impl Bridge {
         &self,
         msg: &DiscordMessage,
     ) -> Vec<OutgoingWowMessage> {
-        let channel_id = ChannelId::new(msg.channel_id);
-        let routes = self.router.get_wow_targets(channel_id);
+        let routes = self.router.get_wow_targets(&msg.channel_name);
 
         if routes.is_empty() {
             debug!(
-                channel_id = msg.channel_id,
+                channel_name = msg.channel_name,
                 "No WoW route for Discord message"
             );
             return Vec::new();
@@ -289,7 +318,7 @@ impl Bridge {
             }
 
             // Get format and create formatter
-            let format = route.format.as_ref()
+            let format = route.discord_to_wow_format.as_ref()
                 .cloned()
                 .unwrap_or_else(|| "%user: %message".to_string());
             
@@ -394,40 +423,51 @@ pub async fn run_command_response_loop(
 mod tests {
     use super::*;
     use crate::config::types::{
-        AccountConfig, ChannelMapping, ChatConfig, DiscordConfig, RealmConfig, WowConfig,
+        ChannelMapping, ChatConfig, DiscordChannelConfig, DiscordConfig,
+        GuildDashboardConfig, GuildEventsConfig, QuirksConfig, WowChannelConfig, WowConfig,
     };
 
     fn make_test_config() -> Config {
         Config {
+            discord: DiscordConfig {
+                token: Some("test".to_string()),
+                enable_dot_commands: true,
+                dot_commands_whitelist: None,
+                enable_commands_channels: None,
+                enable_tag_failed_notifications: false,
+            },
             wow: WowConfig {
-                realm: RealmConfig {
-                    host: "localhost".to_string(),
-                    port: 3724,
-                    name: "Test".to_string(),
-                },
-                account: AccountConfig {
-                    username: "test".to_string(),
-                    password: "test".to_string(),
-                },
+                platform: "Mac".to_string(),
+                enable_server_motd: false,
+                version: "3.3.5".to_string(),
+                realm_build: None,
+                game_build: None,
+                realmlist: "localhost:3724".to_string(),
+                realm: "Test".to_string(),
+                account: "test".to_string(),
+                password: "test".to_string(),
                 character: "TestChar".to_string(),
             },
-            discord: DiscordConfig {
-                token: "test".to_string(),
-                guild_id: None,
-                enable_dot_commands: Some(true),
-            },
-            guild: None,
-            chat: Some(ChatConfig {
+            guild: GuildEventsConfig::default(),
+            chat: ChatConfig {
                 channels: vec![
                     ChannelMapping {
-                        wow: "guild".to_string(),
-                        discord: 123456789,
-                        direction: None,
-                        format: Some("[%user]: %message".to_string()),
+                        direction: "both".to_string(),
+                        wow: WowChannelConfig {
+                            channel_type: "Guild".to_string(),
+                            channel: None,
+                            format: Some("[%user]: %message".to_string()),
+                        },
+                        discord: DiscordChannelConfig {
+                            channel: "guild-chat".to_string(),
+                            format: Some("[%user]: %message".to_string()),
+                        },
                     },
                 ],
-            }),
+            },
             filters: None,
+            guild_dashboard: GuildDashboardConfig::default(),
+            quirks: QuirksConfig::default(),
         }
     }
 

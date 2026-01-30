@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info, warn};
 
-use config::{load_and_validate, env::apply_env_overrides, validate::validate_config};
+use config::{load_and_validate, env::get_config_path};
 use game::{Bridge, BridgeChannels, GameClient};
 use protocol::realm::connector::connect_and_authenticate;
 
@@ -30,37 +30,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Innkeeper v{} starting...", env!("CARGO_PKG_VERSION"));
 
     // Load configuration
-    info!("Loading configuration from innkeeper.conf...");
-    let config = match load_and_validate("innkeeper.conf") {
-        Ok(mut cfg) => {
-            // Apply environment variable overrides
-            cfg = apply_env_overrides(cfg);
+    let config_path = get_config_path();
+    info!("Loading configuration from {}...", config_path);
 
-            // Validate the final config
-            validate_config(&cfg)?;
-            cfg
-        }
+    let config = match load_and_validate(&config_path) {
+        Ok(cfg) => cfg,
         Err(e) => {
             error!("Failed to load configuration: {}", e);
-            error!("Please ensure innkeeper.conf exists and is properly formatted.");
+            error!("Please ensure {} exists and is properly formatted.", config_path);
             error!("See the example configuration for reference.");
             return Err(e.into());
         }
     };
 
     info!("Configuration loaded successfully");
-    info!("  WoW Account: {}", config.wow.account.username);
+
+    info!("  WoW Account: {}", config.wow.account);
     info!("  Character: {}", config.wow.character);
-    info!("  Realm: {} ({}:{})", config.wow.realm.name, config.wow.realm.host, config.wow.realm.port);
+    info!("  Realm: {}", config.wow.realm);
+    info!("  Realmlist: {}", config.wow.realmlist);
+    info!("  Platform: {}", config.wow.platform);
+
+    // Extract realm host and port from realmlist
+    let (realm_host, realm_port) = config.get_realm_host_port();
 
     // Connect to realm server and authenticate
-    info!("Authenticating with realm server...");
+    info!("Authenticating with realm server at {}:{}...", realm_host, realm_port);
     let session = connect_and_authenticate(
-        &config.wow.realm.host,
-        config.wow.realm.port,
-        &config.wow.account.username,
-        &config.wow.account.password,
-        &config.wow.realm.name,
+        &realm_host,
+        realm_port,
+        &config.wow.account,
+        &config.wow.password,
+        &config.wow.realm,
     )
     .await?;
 

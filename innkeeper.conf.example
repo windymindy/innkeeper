@@ -2,95 +2,209 @@
 # HOCON format (Human-Optimized Config Object Notation)
 # https://github.com/lightbend/config/blob/master/HOCON.md
 
-# Discord bot configuration
+# Discord Configurations
 discord {
-    # Your Discord bot token
-    # Get this from https://discord.com/developers/applications
-    token = "YOUR_DISCORD_TOKEN_HERE"
+  # Paste the Discord Token below
+  # Or set the DISCORD_TOKEN environment variable (this is useful if you want to keep sensitive information out of the config file).
+  # Get this from https://discord.com/developers/applications
+  token=${?DISCORD_TOKEN}
 
-    # Optional: Discord guild (server) ID to restrict the bot to
-    # guild_id = 123456789012345678
+  # Enable dot commands (messages starting with . are sent directly to WoW)
+  # Useful for WoW commands like .gm on, .tele, etc.
+  enable_dot_commands=true
 
-    # Enable dot commands (messages starting with . are sent directly to WoW)
-    # Useful for WoW commands like .gm on, .tele, etc.
-    enable_dot_commands = true
+  # List of server (dot) commands that are explicitly enabled
+  # Leaving this as empty means ALL commands are enabled/disabled based on "enable_dot_commands" setting.
+  # The commands here should reflect exactly how the command is input in game. Do not prepend the dot character.
+  # We can also accept wildcards like "lookup *" or "pinfo *"
+  dot_commands_whitelist=[
+    #"server info"
+    #"lookup *"
+  ]
+
+  # List of Discord channels where commands are enabled. If this is unspecified or empty,
+  # ALL channels will have command permissions.
+  enable_commands_channels=[
+
+  ]
+
+  # If a tag matching fails from Discord when someone @ a non-existent or unmatched person or role,
+  # the bot will whisper back notifying so.
+  enable_tag_failed_notifications=true
 }
 
-# WoW connection configuration
+# WoW Configurations
 wow {
-    # Realm server connection
-    realm {
-        host = "logon.project-ascension.com"
-        port = 3724
-        # Must match the realm name exactly as shown in-game
-        name = "Laughing Skull"
-    }
+  # Realm list server address (can include port, e.g., "logon.server.com:3724")
+  realmlist=logon.project-ascension.com
 
-    # Account credentials
-    account {
-        username = "your_username"
-        password = "your_password"
-    }
+  # Realm name to connect to (must match exactly as shown in-game)
+  realm="Laughing Skull"
 
-    # Character name to log in with
-    character = "YourCharacterName"
+  # Account credentials (or use WOW_ACCOUNT/WOW_PASSWORD env vars)
+  account=${?WOW_ACCOUNT}
+  password=${?WOW_PASSWORD}
+
+  # Character name to login with (or use WOW_CHARACTER env var)
+  character=${?WOW_CHARACTER}
+
+  # Whether to treat server's MotD message as a server SYSTEM message.
+  enable_server_motd=true
 }
 
-# Optional: Guild-specific configuration
+# Guild notifications
 guild {
-    # Discord channel ID for guild online/offline notifications
-    # online_channel = 123456789012345678
-
-    # Discord channel ID for guild achievement announcements
-    # achievement_channel = 123456789012345678
+  online {
+    enabled=false
+    format="`[%user] has come online.`"
+  }
+  offline {
+    enabled=false
+    format="`[%user] has gone offline.`"
+  }
+  promoted {
+    enabled=true
+    format="`[%user] has promoted [%target] to [%rank].`"
+  }
+  demoted {
+    enabled=true
+    format="`[%user] has demoted [%target] to [%rank].`"
+  }
+  joined {
+    enabled=true
+    format="`[%user] has joined the guild.`"
+  }
+  left {
+    enabled=true
+    format="`[%user] has left the guild.`"
+  }
+  removed {
+    enabled=true
+    format="`[%target] has been kicked out of the guild by [%user].`"
+  }
+  motd {
+    enabled=true
+    format="`Guild Message of the Day: %message`"
+  }
+  achievement {
+    enabled=true
+    format="%user has earned the achievement %achievement!"
+  }
 }
 
-# Chat channel mappings (WoW ↔ Discord)
+# Optional: Guild dashboard (shows online members in a channel)
+# guild-dashboard {
+#   channel=guild-online
+# }
+
+# Chat to redirect
 chat {
-    channels = [
-        {
-            # WoW channel: "guild", "officer", "say", "yell", "emote", or custom channel name
-            wow = "guild"
+  channels=[
+    {
+      direction=both
+      wow {
+        type=Guild
+        format="[%user]: %message"
+      }
+      discord {
+        channel=guild-chat
+        format="[%user]: %message"
+      }
+    }
+    {
+      direction=both
+      wow {
+        type=Officer
+        format="[%user]: %message"
+      }
+      discord {
+        channel=officer-chat
+        format="[%user]: %message"
+      }
+    }
+    {
+      direction=wow_to_discord
+      wow {
+        type=Say
+        format="[%user]: %message"
+      }
+      discord {
+        channel=guild-chat
+        format="[%user]: %message"
+      }
+    }
+    {
+      direction=wow_to_discord
+      wow {
+        type=Yell
+        format="[%user]: %message"
+      }
+      discord {
+        channel=guild-chat
+        format="[%user]: %message"
+      }
+    }
+    {
+      direction=wow_to_discord
+      wow {
+        type=Emote
+        format="%user %message"
+      }
+      discord {
+        channel=guild-chat
+        format="%user %message"
+      }
+    }
+    {
+      direction=wow_to_discord
+      wow {
+        type=System
+      }
+      discord {
+        channel=guild-chat
+        format="[SYSTEM]: %message"
+      }
+    }
 
-            # Discord channel ID (right-click channel in Discord → Copy ID)
-            discord = 123456789012345678
-
-            # Optional: Message direction
-            # "both" (default), "wow_to_discord", "discord_to_wow"
-            direction = "both"
-
-            # Optional: Custom format for messages
-            # Available placeholders: %time, %user, %message, %channel
-            # format = "[%time] %user: %message"
-        }
-        {
-            wow = "officer"
-            discord = 234567890123456789
-            direction = "both"
-        }
-        {
-            # Custom channel example
-            wow = "world"
-            discord = 345678901234567890
-        }
-    ]
+    # Custom channels
+    {
+      direction=wow_to_discord
+      wow {
+        type=Channel
+        channel="General - Orgrimmar"
+        format="[%user]: %message"
+      }
+      discord {
+        channel=guild-chat
+        format="[%target] [%user]: %message"
+      }
+    }
+    {
+      direction=wow_to_discord
+      wow {
+        type=Channel
+        channel="Trade - City"
+        format="[%user]: %message"
+      }
+      discord {
+        channel=trade-chat
+        format="[%target] [%user]: %message"
+      }
+    }
+  ]
 }
 
-# Optional: Message filters (regex patterns)
 filters {
-    # Filter messages from WoW to Discord
-    # Messages matching these patterns will be dropped
-    wow_to_discord = [
-        # Example: Filter system messages
-        # "^\\[System\\].*"
+  enabled=false
+  # patterns are Java Regexes. Google has the answers you seek.
+  patterns=[
+    # Example: case insensitive filter for messages containing all 3 words g?ld, level, and item in any order
+    # ".*(?i)(?=.*g.?ld)(?=.*level)(?=.*item).*$"
+    # Example: filter for messages containing >> and << in any order
+    # ".*(?=.*>>)(?=.*<<).*$"
+  ]
+}
 
-        # Example: Filter achievement spam
-        # ".*has earned the achievement.*"
-    ]
-
-    # Filter messages from Discord to WoW
-    discord_to_wow = [
-        # Example: Block URLs
-        # "https?://.*"
-    ]
+quirks {
+  sit=false
 }

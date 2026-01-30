@@ -36,7 +36,7 @@ serenity = { version = "0.12", default-features = false, features = [
 # Configuration
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-hocon = { version = "0.9", features = ["serde-support"] }
+hocon-rs = "0.1"
 
 # Utilities
 thiserror = "2"

@@ -56,7 +56,7 @@ impl GameClient {
     {
         let mut connection = new_game_connection(stream);
         let mut handler = GameHandler::new(
-            &self.config.wow.account.username,
+            &self.config.wow.account,
             self.session.session_key,
             self.session.realm.id as u32,
         );
@@ -271,32 +271,36 @@ impl GameClient {
 mod tests {
     use super::*;
     use crate::config::types::{
-        AccountConfig, DiscordConfig, RealmConfig, WowConfig,
+        ChatConfig, DiscordConfig, GuildDashboardConfig, GuildEventsConfig, QuirksConfig, WowConfig,
     };
     use crate::protocol::realm::packets::RealmInfo;
 
     fn make_test_config() -> Config {
         Config {
+            discord: DiscordConfig {
+                token: Some("test".to_string()),
+                enable_dot_commands: false,
+                dot_commands_whitelist: None,
+                enable_commands_channels: None,
+                enable_tag_failed_notifications: false,
+            },
             wow: WowConfig {
-                realm: RealmConfig {
-                    host: "localhost".to_string(),
-                    port: 3724,
-                    name: "Test".to_string(),
-                },
-                account: AccountConfig {
-                    username: "test".to_string(),
-                    password: "test".to_string(),
-                },
+                platform: "Mac".to_string(),
+                enable_server_motd: false,
+                version: "3.3.5".to_string(),
+                realm_build: None,
+                game_build: None,
+                realmlist: "localhost:3724".to_string(),
+                realm: "Test".to_string(),
+                account: "test".to_string(),
+                password: "test".to_string(),
                 character: "TestChar".to_string(),
             },
-            discord: DiscordConfig {
-                token: "test".to_string(),
-                guild_id: None,
-                enable_dot_commands: Some(true),
-            },
-            guild: None,
-            chat: None,
+            guild: GuildEventsConfig::default(),
+            chat: ChatConfig::default(),
             filters: None,
+            guild_dashboard: GuildDashboardConfig::default(),
+            quirks: QuirksConfig::default(),
         }
     }
 
