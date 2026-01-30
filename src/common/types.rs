@@ -76,6 +76,30 @@ impl ChatType {
             _ => None,
         }
     }
+
+    /// Convert ChatType to its protocol wire value.
+    /// This is the inverse of from_id().
+    pub fn to_id(&self) -> u8 {
+        match self {
+            Self::System => 0x00,
+            Self::Say => 0x01,
+            Self::Party => 0x02,
+            Self::Raid => 0x03,
+            Self::Guild => 0x04,
+            Self::Officer => 0x05,
+            Self::Yell => 0x06,
+            Self::Whisper => 0x07,
+            Self::WhisperInform => 0x09,
+            Self::Emote => 0x0A,
+            Self::Channel => 0x11,
+            Self::RaidLeader => 0x28,
+            Self::RaidWarning => 0x29,
+            Self::Battleground => 0x2C,
+            Self::BattlegroundLeader => 0x2D,
+            Self::Achievement => 0x30,
+            Self::GuildAchievement => 0x31,
+        }
+    }
 }
 
 /// A chat message from WoW.

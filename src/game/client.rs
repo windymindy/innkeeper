@@ -129,7 +129,7 @@ impl GameClient {
                                             let wow_msg = WowMessage {
                                                 sender: Some(chat_msg.sender_name),
                                                 content: chat_msg.content,
-                                                chat_type: chat_msg.chat_type as u8,
+                                                chat_type: chat_msg.chat_type.to_id(),
                                                 channel_name: chat_msg.channel_name,
                                                 format: None,
                                             };
@@ -159,7 +159,7 @@ impl GameClient {
                                         let wow_msg = WowMessage {
                                             sender: Some(chat_msg.sender_name),
                                             content: chat_msg.content,
-                                            chat_type: chat_msg.chat_type as u8,
+                                            chat_type: chat_msg.chat_type.to_id(),
                                             channel_name: chat_msg.channel_name,
                                             format: None,
                                         };
@@ -186,7 +186,7 @@ impl GameClient {
                                         let wow_msg = WowMessage {
                                             sender: None, // System message
                                             content: notification,
-                                            chat_type: 0x12, // CHAT_MSG_GUILD (same type as guild chat)
+                                            chat_type: 0x04, // CHAT_MSG_GUILD - route to guild channel
                                             channel_name: None,
                                             format: None,
                                         };
@@ -234,7 +234,7 @@ impl GameClient {
                                             let wow_msg = WowMessage {
                                                 sender: Some(chat_msg.sender_name),
                                                 content: chat_msg.content,
-                                                chat_type: chat_msg.chat_type as u8,
+                                                chat_type: chat_msg.chat_type.to_id(),
                                                 channel_name: chat_msg.channel_name,
                                                 format: None,
                                             };
@@ -353,7 +353,7 @@ mod tests {
     fn make_test_config() -> Config {
         Config {
             discord: DiscordConfig {
-                token: Some("test".to_string()),
+                token: "test".to_string(),
                 enable_dot_commands: false,
                 dot_commands_whitelist: None,
                 enable_commands_channels: None,
@@ -398,7 +398,7 @@ mod tests {
     async fn test_auth_flow() {
         let config = make_test_config();
         let session = make_test_session();
-        let channels = BridgeChannels::new();
+        let (channels, _wow_rx) = BridgeChannels::new();
         let mut client = GameClient::new(config, session, channels, Vec::new());
 
         let (client_stream, mut server_stream) = tokio::io::duplex(4096);

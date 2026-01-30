@@ -20,7 +20,13 @@ pub enum WowCommand {
 #[derive(Debug, Clone)]
 pub struct CommandResponse {
     pub channel_id: u64,
-    pub message: String,
+    pub content: String,
+}
+
+impl CommandResponse {
+    pub fn new(channel_id: u64, content: String) -> Self {
+        Self { channel_id, content }
+    }
 }
 
 /// Command handler for Discord bot.

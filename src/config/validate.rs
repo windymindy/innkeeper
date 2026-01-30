@@ -10,17 +10,11 @@ pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
     let mut errors = Vec::new();
 
     // Validate Discord config
-    let has_token = config
-        .discord
-        .token
-        .as_ref()
-        .map(|t| !t.is_empty())
-        .unwrap_or(false);
-    if !has_token {
+    if config.discord.token.is_empty() {
         errors.push(
             "discord.token is required (set in config or use DISCORD_TOKEN env var)".to_string(),
         );
-    } else if config.discord.token.as_ref().unwrap() == "YOUR_DISCORD_TOKEN_HERE" {
+    } else if config.discord.token == "YOUR_DISCORD_TOKEN_HERE" {
         errors.push("discord.token has not been configured (still using placeholder)".to_string());
     }
 
@@ -129,18 +123,9 @@ pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
 
 /// Quick check if config has the minimum required fields populated.
 pub fn has_required_fields(config: &Config) -> bool {
-    let has_token = config
-        .discord
-        .token
-        .as_ref()
-        .map(|t| !t.is_empty())
-        .unwrap_or(false);
-    let has_account = !config.wow.account.is_empty();
-    let has_password = !config.wow.password.is_empty();
-
-    has_token
-        && has_account
-        && has_password
+    !config.discord.token.is_empty()
+        && !config.wow.account.is_empty()
+        && !config.wow.password.is_empty()
         && !config.wow.character.is_empty()
         && !config.wow.realmlist.is_empty()
         && !config.wow.realm.is_empty()
@@ -155,7 +140,7 @@ mod tests {
     fn make_valid_config() -> Config {
         Config {
             discord: DiscordConfig {
-                token: Some("valid_token_here".to_string()),
+                token: "valid_token_here".to_string(),
                 enable_dot_commands: true,
                 dot_commands_whitelist: None,
                 enable_commands_channels: None,
@@ -203,7 +188,7 @@ mod tests {
     #[test]
     fn test_empty_token_fails() {
         let mut config = make_valid_config();
-        config.discord.token = None;
+        config.discord.token = String::new();
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -213,7 +198,7 @@ mod tests {
     #[test]
     fn test_placeholder_token_fails() {
         let mut config = make_valid_config();
-        config.discord.token = Some("YOUR_DISCORD_TOKEN_HERE".to_string());
+        config.discord.token = "YOUR_DISCORD_TOKEN_HERE".to_string();
 
         let result = validate_config(&config);
         assert!(result.is_err());
@@ -262,7 +247,7 @@ mod tests {
         assert!(has_required_fields(&config));
 
         let mut invalid = make_valid_config();
-        invalid.discord.token = None;
+        invalid.discord.token = String::new();
         assert!(!has_required_fields(&invalid));
     }
 }

@@ -279,8 +279,8 @@ fn default_empty_string() -> String {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscordConfig {
     /// Discord bot token (or use DISCORD_TOKEN env var)
-    #[serde(default, deserialize_with = "option_string")]
-    pub token: Option<String>,
+    #[serde(default)]
+    pub token: String,
     /// Enable dot commands (.help, etc.)
     #[serde(default = "default_enabled", deserialize_with = "bool_or_int")]
     pub enable_dot_commands: bool,

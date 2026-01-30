@@ -15,6 +15,7 @@ use crate::game::formatter::{escape_discord_markdown, split_message, FormatConte
 use crate::game::router::{MessageRouter, SharedRouter};
 
 /// Message from WoW to be sent to Discord.
+/// This mirrors IncomingWowMessage from discord/handler.rs for compatibility.
 #[derive(Debug, Clone)]
 pub struct WowMessage {
     /// Sender's name (None for system messages).
@@ -25,8 +26,19 @@ pub struct WowMessage {
     pub chat_type: u8,
     /// Channel name for custom channels.
     pub channel_name: Option<String>,
-    /// Custom format override.
+    /// Custom format override (optional, for backward compatibility).
     pub format: Option<String>,
+}
+
+impl From<WowMessage> for crate::discord::handler::IncomingWowMessage {
+    fn from(msg: WowMessage) -> Self {
+        Self {
+            sender: msg.sender,
+            content: msg.content,
+            chat_type: msg.chat_type,
+            channel_name: msg.channel_name,
+        }
+    }
 }
 
 /// Message from Discord to be sent to WoW.
@@ -52,33 +64,18 @@ pub enum BridgeCommand {
 }
 
 /// Command response to be sent to Discord.
-#[derive(Debug, Clone)]
-pub struct CommandResponse {
-    /// The Discord channel ID to send the response to.
-    pub channel_id: u64,
-    /// The response content.
-    pub content: String,
-}
+/// Re-exported from discord/commands for consistency.
+pub use crate::discord::commands::CommandResponse;
 
 /// Message to send to WoW game handler.
-#[derive(Debug, Clone)]
-pub struct OutgoingWowMessage {
-    /// Chat type to send as.
-    pub chat_type: u8,
-    /// Channel name for custom channels.
-    pub channel_name: Option<String>,
-    /// Sender's name (for formatting).
-    pub sender: String,
-    /// Message content.
-    pub content: String,
-}
+/// Re-exported from discord/handler.rs for consistency.
+pub use crate::discord::handler::OutgoingWowMessage;
 
 /// Channels for bridge communication.
+/// Uses types compatible with discord/handler.rs
 pub struct BridgeChannels {
     /// Sender for WoW -> Discord messages.
     pub wow_tx: mpsc::UnboundedSender<WowMessage>,
-    /// Receiver for WoW -> Discord messages.
-    pub wow_rx: mpsc::UnboundedReceiver<WowMessage>,
     /// Sender for Discord -> WoW messages.
     pub discord_tx: mpsc::UnboundedSender<DiscordMessage>,
     /// Receiver for Discord -> WoW messages.
@@ -99,16 +96,16 @@ pub struct BridgeChannels {
 
 impl BridgeChannels {
     /// Create a new set of bridge channels.
-    pub fn new() -> Self {
+    /// Returns the channels struct along with the wow_rx receiver for external forwarding.
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<WowMessage>) {
         let (wow_tx, wow_rx) = mpsc::unbounded_channel();
         let (discord_tx, discord_rx) = mpsc::unbounded_channel();
         let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
 
-        Self {
+        let channels = Self {
             wow_tx,
-            wow_rx,
             discord_tx,
             discord_rx,
             outgoing_wow_tx,
@@ -117,15 +114,13 @@ impl BridgeChannels {
             command_rx,
             command_response_tx,
             command_response_rx,
-        }
+        };
+
+        (channels, wow_rx)
     }
 }
 
-impl Default for BridgeChannels {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+
 
 /// Discord channel resolver function type.
 pub type ChannelResolver = Arc<dyn Fn(&str) -> Option<ChannelId> + Send + Sync>;
@@ -430,7 +425,7 @@ mod tests {
     fn make_test_config() -> Config {
         Config {
             discord: DiscordConfig {
-                token: Some("test".to_string()),
+                token: "test".to_string(),
                 enable_dot_commands: true,
                 dot_commands_whitelist: None,
                 enable_commands_channels: None,

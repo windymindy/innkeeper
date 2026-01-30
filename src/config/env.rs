@@ -25,10 +25,10 @@ use crate::config::types::Config;
 /// that weren't set via HOCON's ${?VAR} syntax.
 pub fn apply_env_overrides(mut config: Config) -> Config {
     // Discord token (only if not already set)
-    if config.discord.token.is_none() || config.discord.token.as_ref().unwrap().is_empty() {
+    if config.discord.token.is_empty() {
         if let Ok(token) = env::var("DISCORD_TOKEN") {
             if !token.is_empty() {
-                config.discord.token = Some(token);
+                config.discord.token = token;
             }
         }
     }
@@ -66,13 +66,7 @@ pub fn check_missing_required(config: &Config) -> Vec<String> {
     let mut missing = Vec::new();
 
     // Check Discord token
-    let has_token = config
-        .discord
-        .token
-        .as_ref()
-        .map(|t| !t.is_empty())
-        .unwrap_or(false);
-    if !has_token {
+    if config.discord.token.is_empty() {
         missing.push("discord.token (or DISCORD_TOKEN env var)".to_string());
     }
 
@@ -120,7 +114,7 @@ mod tests {
     fn make_test_config() -> Config {
         Config {
             discord: DiscordConfig {
-                token: Some("original_token".to_string()),
+                token: "original_token".to_string(),
                 enable_dot_commands: false,
                 dot_commands_whitelist: None,
                 enable_commands_channels: None,
@@ -164,7 +158,7 @@ mod tests {
         let result = apply_env_overrides(config);
 
         // Should remain unchanged
-        assert_eq!(result.discord.token, Some("original_token".to_string()));
+        assert_eq!(result.discord.token, "original_token".to_string());
         assert_eq!(result.wow.account, "test".to_string());
     }
 
