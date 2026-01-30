@@ -194,34 +194,7 @@ impl GameHandler {
             Err(e) => return Err(e),
         };
 
-        // Ignore messages from self (except system messages)
-        if let Some(self_guid) = self.self_guid {
-            if msg.sender_guid == self_guid && msg.chat_type != chat_events::CHAT_MSG_SYSTEM {
-                debug!("Ignoring message from self");
-                return Ok(None);
-            }
-        }
-
-        // If sender GUID is 0, it's a system message - no name lookup needed
-        if msg.sender_guid == 0 {
-            return Ok(Some(msg.to_chat_message(String::new())));
-        }
-
-        // Look up sender name in cache
-        if let Some(player) = self.player_names.get(&msg.sender_guid) {
-            return Ok(Some(msg.to_chat_message(player.name.clone())));
-        }
-
-        // Queue message for name resolution
-        let chat_msg = msg.to_chat_message(format!("Unknown-{}", msg.sender_guid));
-        self.pending_messages
-            .entry(msg.sender_guid)
-            .or_default()
-            .push(chat_msg.clone());
-
-        // Return None to indicate name query is needed
-        debug!("Sender {} not in cache, need name query", msg.sender_guid);
-        Ok(None)
+        self.process_chat_message(msg)
     }
 
     /// Handle SMSG_NAME_QUERY response.
@@ -459,5 +432,96 @@ impl GameHandler {
             info: String::new(),
             members: self.guild_roster.values().cloned().collect(),
         }
+    }
+
+    // =========================================================================
+    // Server notification messages
+    // =========================================================================
+
+    /// Handle SMSG_NOTIFICATION packet.
+    pub fn handle_notification(&self, mut payload: Bytes) -> Result<String, ProtocolError> {
+        use crate::protocol::game::chat::ServerNotification;
+        use crate::protocol::packets::PacketDecode;
+
+        let notification = ServerNotification::decode(&mut payload)?;
+        info!("Server notification: {}", notification.message);
+        Ok(notification.message)
+    }
+
+    /// Handle SMSG_MOTD packet.
+    pub fn handle_motd(&mut self, mut payload: Bytes) -> Result<Option<String>, ProtocolError> {
+        use crate::protocol::game::chat::ServerMotd;
+        use crate::protocol::packets::PacketDecode;
+
+        let motd = ServerMotd::decode(&mut payload)?;
+        let message = motd.to_message();
+
+        if !message.is_empty() {
+            info!("Server MOTD: {}", message);
+            Ok(Some(message))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Handle SMSG_GM_MESSAGECHAT packet.
+    pub fn handle_gm_messagechat(
+        &mut self,
+        mut payload: Bytes,
+    ) -> Result<Option<ChatMessage>, ProtocolError> {
+        use crate::protocol::game::chat::MessageChat;
+
+        let msg = MessageChat::decode_(&mut payload, true)?;
+
+        self.process_chat_message(msg)
+    }
+
+    /// Internal method to process chat messages (used by both regular and GM handlers).
+    fn process_chat_message(
+        &mut self,
+        msg: crate::protocol::game::chat::MessageChat,
+    ) -> Result<Option<ChatMessage>, ProtocolError> {
+        use crate::protocol::game::chat::chat_events;
+
+        // Ignore messages from self (except system messages)
+        if let Some(self_guid) = self.self_guid {
+            if msg.sender_guid == self_guid && msg.chat_type != chat_events::CHAT_MSG_SYSTEM {
+                debug!("Ignoring message from self");
+                return Ok(None);
+            }
+        }
+
+        // If sender GUID is 0, it's a system message - no name lookup needed
+        if msg.sender_guid == 0 {
+            return Ok(Some(msg.to_chat_message(String::new())));
+        }
+
+        // Look up sender name in cache
+        if let Some(player) = self.player_names.get(&msg.sender_guid) {
+            return Ok(Some(msg.to_chat_message(player.name.clone())));
+        }
+
+        // Queue message for name resolution
+        let chat_msg = msg.to_chat_message(format!("Unknown-{}", msg.sender_guid));
+        self.pending_messages
+            .entry(msg.sender_guid)
+            .or_default()
+            .push(chat_msg.clone());
+
+        // Return None to indicate name query is needed
+        debug!("Sender {} not in cache, need name query", msg.sender_guid);
+        Ok(None)
+    }
+
+    /// Handle SMSG_SERVER_MESSAGE packet.
+    pub fn handle_server_message(&self, mut payload: Bytes) -> Result<String, ProtocolError> {
+        use crate::protocol::game::chat::ServerMessage;
+        use crate::protocol::packets::PacketDecode;
+
+        let msg = ServerMessage::decode(&mut payload)?;
+        let formatted = msg.formatted_message();
+
+        info!("Server message: {}", formatted);
+        Ok(formatted)
     }
 }

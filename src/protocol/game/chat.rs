@@ -11,25 +11,31 @@ use crate::protocol::packets::{PacketDecode, PacketEncode};
 /// Chat events (message types) from WoW protocol.
 #[allow(dead_code)]
 pub mod chat_events {
-    pub const CHAT_MSG_SAY: u8 = 0x00;
-    pub const CHAT_MSG_PARTY: u8 = 0x01;
-    pub const CHAT_MSG_RAID: u8 = 0x02;
-    pub const CHAT_MSG_GUILD: u8 = 0x03;
-    pub const CHAT_MSG_OFFICER: u8 = 0x04;
-    pub const CHAT_MSG_YELL: u8 = 0x05;
-    pub const CHAT_MSG_WHISPER: u8 = 0x06;
-    pub const CHAT_MSG_WHISPER_INFORM: u8 = 0x07;
+    pub const CHAT_MSG_SYSTEM: u8 = 0x00;
+    pub const CHAT_MSG_SAY: u8 = 0x01;
+    pub const CHAT_MSG_PARTY: u8 = 0x02;
+    pub const CHAT_MSG_RAID: u8 = 0x03;
+    pub const CHAT_MSG_GUILD: u8 = 0x04;
+    pub const CHAT_MSG_OFFICER: u8 = 0x05;
+    pub const CHAT_MSG_YELL: u8 = 0x06;
+    pub const CHAT_MSG_WHISPER: u8 = 0x07;
+    pub const CHAT_MSG_WHISPER_INFORM: u8 = 0x09;
     pub const CHAT_MSG_REPLY: u8 = 0x08;
-    pub const CHAT_MSG_EMOTE: u8 = 0x09;
-    pub const CHAT_MSG_TEXT_EMOTE: u8 = 0x0A;
-    pub const CHAT_MSG_SYSTEM: u8 = 0x0B;
+    pub const CHAT_MSG_EMOTE: u8 = 0x0A;
+    pub const CHAT_MSG_TEXT_EMOTE: u8 = 0x0B;
     pub const CHAT_MSG_MONSTER_SAY: u8 = 0x0C;
     pub const CHAT_MSG_MONSTER_YELL: u8 = 0x0D;
-    pub const CHAT_MSG_CHANNEL: u8 = 0x0E;
-    pub const CHAT_MSG_RAID_LEADER: u8 = 0x27;
-    pub const CHAT_MSG_RAID_WARNING: u8 = 0x28;
-    pub const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x29;
-    pub const CHAT_MSG_RAID_BOSS_EMOTE: u8 = 0x2A;
+    pub const CHAT_MSG_CHANNEL: u8 = 0x11;
+    pub const CHAT_MSG_CHANNEL_JOIN: u8 = 0x12;
+    pub const CHAT_MSG_CHANNEL_LEAVE: u8 = 0x13;
+    pub const CHAT_MSG_CHANNEL_LIST: u8 = 0x14;
+    pub const CHAT_MSG_CHANNEL_NOTICE: u8 = 0x15;
+    pub const CHAT_MSG_CHANNEL_NOTICE_USER: u8 = 0x16;
+    pub const CHAT_MSG_IGNORED: u8 = 0x19;
+    pub const CHAT_MSG_RAID_LEADER: u8 = 0x28;
+    pub const CHAT_MSG_RAID_WARNING: u8 = 0x29;
+    pub const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x2A;
+    pub const CHAT_MSG_RAID_BOSS_EMOTE: u8 = 0x2B;
     pub const CHAT_MSG_BATTLEGROUND: u8 = 0x2C;
     pub const CHAT_MSG_BATTLEGROUND_LEADER: u8 = 0x2D;
     pub const CHAT_MSG_ACHIEVEMENT: u8 = 0x30;
@@ -39,17 +45,42 @@ pub mod chat_events {
 /// Channel notification types.
 #[allow(dead_code)]
 pub mod chat_notify {
-    pub const CHAT_YOU_JOINED_NOTICE: u8 = 0x00;
-    pub const CHAT_YOU_LEFT_NOTICE: u8 = 0x01;
-    pub const CHAT_WRONG_PASSWORD_NOTICE: u8 = 0x02;
-    pub const CHAT_MUTED_NOTICE: u8 = 0x03;
-    pub const CHAT_BANNED_NOTICE: u8 = 0x06;
-    pub const CHAT_WRONG_FACTION_NOTICE: u8 = 0x08;
-    pub const CHAT_INVALID_NAME_NOTICE: u8 = 0x09;
-    pub const CHAT_NOT_MODERATED_NOTICE: u8 = 0x0A;
-    pub const CHAT_THROTTLED_NOTICE: u8 = 0x0E;
-    pub const CHAT_NOT_IN_AREA_NOTICE: u8 = 0x0F;
-    pub const CHAT_NOT_IN_LFG_NOTICE: u8 = 0x10;
+    pub const CHAT_JOINED_NOTICE: u8 = 0x00;
+    pub const CHAT_LEFT_NOTICE: u8 = 0x01;
+    pub const CHAT_YOU_JOINED_NOTICE: u8 = 0x02;
+    pub const CHAT_YOU_LEFT_NOTICE: u8 = 0x03;
+    pub const CHAT_WRONG_PASSWORD_NOTICE: u8 = 0x04;
+    pub const CHAT_NOT_MEMBER_NOTICE: u8 = 0x05;
+    pub const CHAT_NOT_MODERATOR_NOTICE: u8 = 0x06;
+    pub const CHAT_PASSWORD_CHANGED_NOTICE: u8 = 0x07;
+    pub const CHAT_OWNER_CHANGED_NOTICE: u8 = 0x08;
+    pub const CHAT_PLAYER_NOT_FOUND_NOTICE: u8 = 0x09;
+    pub const CHAT_NOT_OWNER_NOTICE: u8 = 0x0A;
+    pub const CHAT_CHANNEL_OWNER_NOTICE: u8 = 0x0B;
+    pub const CHAT_MODE_CHANGE_NOTICE: u8 = 0x0C;
+    pub const CHAT_ANNOUNCEMENTS_ON_NOTICE: u8 = 0x0D;
+    pub const CHAT_ANNOUNCEMENTS_OFF_NOTICE: u8 = 0x0E;
+    pub const CHAT_MODERATION_ON_NOTICE: u8 = 0x0F;
+    pub const CHAT_MODERATION_OFF_NOTICE: u8 = 0x10;
+    pub const CHAT_MUTED_NOTICE: u8 = 0x11;
+    pub const CHAT_PLAYER_KICKED_NOTICE: u8 = 0x12;
+    pub const CHAT_BANNED_NOTICE: u8 = 0x13;
+    pub const CHAT_PLAYER_BANNED_NOTICE: u8 = 0x14;
+    pub const CHAT_PLAYER_UNBANNED_NOTICE: u8 = 0x15;
+    pub const CHAT_PLAYER_NOT_BANNED_NOTICE: u8 = 0x16;
+    pub const CHAT_PLAYER_ALREADY_MEMBER_NOTICE: u8 = 0x17;
+    pub const CHAT_INVITE_NOTICE: u8 = 0x18;
+    pub const CHAT_INVITE_WRONG_FACTION_NOTICE: u8 = 0x19;
+    pub const CHAT_WRONG_FACTION_NOTICE: u8 = 0x1A;
+    pub const CHAT_INVALID_NAME_NOTICE: u8 = 0x1B;
+    pub const CHAT_NOT_MODERATED_NOTICE: u8 = 0x1C;
+    pub const CHAT_PLAYER_INVITED_NOTICE: u8 = 0x1D;
+    pub const CHAT_PLAYER_INVITE_BANNED_NOTICE: u8 = 0x1E;
+    pub const CHAT_THROTTLED_NOTICE: u8 = 0x1F;
+    pub const CHAT_NOT_IN_AREA_NOTICE: u8 = 0x20;
+    pub const CHAT_NOT_IN_LFG_NOTICE: u8 = 0x21;
+    pub const CHAT_VOICE_ON_NOTICE: u8 = 0x22;
+    pub const CHAT_VOICE_OFF_NOTICE: u8 = 0x23;
 }
 
 /// Language IDs for chat messages.
@@ -103,9 +134,15 @@ impl PacketDecode for MessageChat {
     type Error = ProtocolError;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
-        if buf.remaining() < 5 {
+        Self::decode_(buf, false)
+    }
+}
+
+impl MessageChat {
+    pub fn decode_(buf: &mut Bytes, is_gm: bool) -> Result<Self, ProtocolError> {
+        if buf.remaining() < 13 {
             return Err(ProtocolError::PacketTooShort {
-                needed: 5,
+                needed: 13,
                 got: buf.remaining(),
             });
         }
@@ -120,39 +157,34 @@ impl PacketDecode for MessageChat {
             });
         }
 
-        // For channel messages, read channel name first
-        let channel_name = if chat_type == chat_events::CHAT_MSG_CHANNEL {
-            let name = read_cstring(buf)?;
-            // Skip player GUID for channel messages (4 bytes unknown field in WotLK)
+        // Read sender GUID (8 bytes)
+        let sender_guid = buf.get_u64_le();
+
+        // Skip 4 bytes (unknown field after sender GUID)
+        if buf.remaining() >= 4 {
+            buf.advance(4);
+        }
+
+        // GM messages: skip 4 bytes + skip prefix string
+        if is_gm {
             if buf.remaining() >= 4 {
                 buf.advance(4);
             }
-            Some(name)
+            // Skip GM prefix string
+            read_cstring(buf)?;
+        }
+
+        // For channel messages, read channel name
+        let channel_name = if chat_type == chat_events::CHAT_MSG_CHANNEL {
+            Some(read_cstring(buf)?)
         } else {
             None
         };
 
-        // Sender GUID
-        if buf.remaining() < 8 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 8,
-                got: buf.remaining(),
-            });
+        // Skip 8 bytes (guid again - appears twice in protocol)
+        if buf.remaining() >= 8 {
+            buf.advance(8);
         }
-        let sender_guid = buf.get_u64_le();
-
-        // Some message types have a second guid block we need to skip
-        // SAY, YELL have target_guid after sender_guid
-        let target_guid = match chat_type {
-            chat_events::CHAT_MSG_SAY | chat_events::CHAT_MSG_YELL => {
-                if buf.remaining() >= 8 {
-                    Some(buf.get_u64_le())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
 
         // Message length (includes null terminator)
         if buf.remaining() < 4 {
@@ -178,25 +210,27 @@ impl PacketDecode for MessageChat {
         }
 
         let message_bytes = buf.copy_to_bytes(msg_len);
-        let message = String::from_utf8(message_bytes.to_vec()).unwrap_or_else(|_| String::new());
+        let message = String::from_utf8_lossy(&message_bytes).to_string();
 
         // Skip null terminator
         if buf.remaining() > 0 {
             buf.advance(1);
         }
 
-        // Chat tag (if present)
-        let chat_tag = if buf.remaining() > 0 { buf.get_u8() } else { 0 };
+        // Skip chat tag (1 byte)
+        if buf.remaining() > 0 {
+            buf.advance(1);
+        }
 
         Ok(MessageChat {
             chat_type,
             language,
             sender_guid,
             channel_name,
-            target_guid,
+            target_guid: None, // Not parsed in WotLK format
             message_length,
             message,
-            chat_tag,
+            chat_tag: 0, // Already skipped
         })
     }
 }
@@ -403,28 +437,40 @@ impl PacketDecode for NameQueryResponse {
     type Error = ProtocolError;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
-        if buf.remaining() < 8 {
+        // WotLK uses packed GUID (variable length, 1-9 bytes)
+        let guid = read_packed_guid(buf)?;
+
+        // WotLK has a nameKnown byte before the name
+        if buf.remaining() < 1 {
             return Err(ProtocolError::PacketTooShort {
-                needed: 8,
+                needed: 1,
                 got: buf.remaining(),
             });
         }
+        let name_known = buf.get_u8();
 
-        let guid = buf.get_u64_le();
-        let name = read_cstring(buf)?;
-        let realm_name = read_cstring(buf)?;
+        let (name, realm_name, race, gender, class) = if name_known == 0 {
+            // Name is known - read full data
+            let name = read_cstring(buf)?;
+            let realm_name = read_cstring(buf)?;
 
-        // WotLK sends 4-byte values for race, gender, class
-        if buf.remaining() < 12 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 12,
-                got: buf.remaining(),
-            });
-        }
+            // WotLK sends 1-byte values for race, gender, class (not 4-byte!)
+            if buf.remaining() < 3 {
+                return Err(ProtocolError::PacketTooShort {
+                    needed: 3,
+                    got: buf.remaining(),
+                });
+            }
 
-        let race = buf.get_u32_le();
-        let gender = buf.get_u32_le();
-        let class = buf.get_u32_le();
+            let race = buf.get_u8() as u32;
+            let gender = buf.get_u8() as u32;
+            let class = buf.get_u8() as u32;
+
+            (name, realm_name, race, gender, class)
+        } else {
+            // Name not known - use defaults
+            ("UNKNOWN".to_string(), "".to_string(), 0, 0, 0xFF)
+        };
 
         Ok(NameQueryResponse {
             guid,
@@ -447,9 +493,37 @@ fn read_cstring(buf: &mut Bytes) -> Result<String, ProtocolError> {
         }
         bytes.push(b);
     }
-    String::from_utf8(bytes).map_err(|e| ProtocolError::InvalidString {
-        message: e.to_string(),
-    })
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Helper function to read a packed GUID (variable length, 1-9 bytes).
+/// WoW uses packed GUIDs to save bandwidth - only non-zero bytes of the GUID are sent.
+fn read_packed_guid(buf: &mut Bytes) -> Result<u64, ProtocolError> {
+    if buf.remaining() < 1 {
+        return Err(ProtocolError::PacketTooShort {
+            needed: 1,
+            got: buf.remaining(),
+        });
+    }
+
+    let set = buf.get_u8();
+    let mut result = 0u64;
+
+    for i in 0..8 {
+        let on_bit = 1 << i;
+        if (set & on_bit) == on_bit {
+            if buf.remaining() < 1 {
+                return Err(ProtocolError::PacketTooShort {
+                    needed: 1,
+                    got: buf.remaining(),
+                });
+            }
+            let byte_val = buf.get_u8() as u64;
+            result |= byte_val << (i * 8);
+        }
+    }
+
+    Ok(result)
 }
 
 /// Get the language ID for a race (for sending messages).
@@ -469,6 +543,120 @@ pub fn get_language_for_race(race: u8) -> u32 {
         10 => languages::LANG_ORCISH, // Blood Elf
         // Unknown - default to Common
         _ => languages::LANG_COMMON,
+    }
+}
+
+// ============================================================================
+// Server Notification Messages
+// ============================================================================
+
+/// SMSG_NOTIFICATION packet - Simple server notification message.
+#[derive(Debug, Clone)]
+pub struct ServerNotification {
+    pub message: String,
+}
+
+impl PacketDecode for ServerNotification {
+    type Error = ProtocolError;
+
+    fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
+        let message = read_cstring(buf)?;
+        Ok(ServerNotification { message })
+    }
+}
+
+/// SMSG_MOTD packet - Server Message of the Day (multiple lines).
+#[derive(Debug, Clone)]
+pub struct ServerMotd {
+    pub lines: Vec<String>,
+}
+
+impl ServerMotd {
+    /// Convert to a single formatted message.
+    pub fn to_message(&self) -> String {
+        self.lines.join("\n")
+    }
+}
+
+impl PacketDecode for ServerMotd {
+    type Error = ProtocolError;
+
+    fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
+        if buf.remaining() < 4 {
+            return Err(ProtocolError::PacketTooShort {
+                needed: 4,
+                got: buf.remaining(),
+            });
+        }
+
+        let line_count = buf.get_u32_le() as usize;
+        let mut lines = Vec::with_capacity(line_count);
+
+        for _ in 0..line_count {
+            lines.push(read_cstring(buf)?);
+        }
+
+        Ok(ServerMotd { lines })
+    }
+}
+
+/// Server message types for SMSG_SERVER_MESSAGE.
+#[allow(dead_code)]
+pub mod server_message_types {
+    pub const SERVER_MSG_SHUTDOWN_TIME: u32 = 1;
+    pub const SERVER_MSG_RESTART_TIME: u32 = 2;
+    pub const SERVER_MSG_STRING: u32 = 3;
+    pub const SERVER_MSG_SHUTDOWN_CANCELLED: u32 = 4;
+    pub const SERVER_MSG_RESTART_CANCELLED: u32 = 5;
+    pub const SERVER_MSG_BATTLEGROUND_SHUTDOWN: u32 = 6;
+    pub const SERVER_MSG_BATTLEGROUND_RESTART: u32 = 7;
+    pub const SERVER_MSG_INSTANCE_SHUTDOWN: u32 = 8;
+    pub const SERVER_MSG_INSTANCE_RESTART: u32 = 9;
+}
+
+/// SMSG_SERVER_MESSAGE packet - Server announcements (shutdowns, restarts, etc.).
+#[derive(Debug, Clone)]
+pub struct ServerMessage {
+    pub message_type: u32,
+    pub text: String,
+}
+
+impl ServerMessage {
+    /// Get a formatted message based on the type.
+    pub fn formatted_message(&self) -> String {
+        match self.message_type {
+            server_message_types::SERVER_MSG_SHUTDOWN_TIME => {
+                format!("Server shutdown in {}", self.text)
+            }
+            server_message_types::SERVER_MSG_RESTART_TIME => {
+                format!("Server restart in {}", self.text)
+            }
+            server_message_types::SERVER_MSG_SHUTDOWN_CANCELLED => {
+                "Server shutdown cancelled.".to_string()
+            }
+            server_message_types::SERVER_MSG_RESTART_CANCELLED => {
+                "Server restart cancelled.".to_string()
+            }
+            _ => self.text.clone(),
+        }
+    }
+}
+
+impl PacketDecode for ServerMessage {
+    type Error = ProtocolError;
+
+    fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
+        if buf.remaining() < 4 {
+            return Err(ProtocolError::PacketTooShort {
+                needed: 4,
+                got: buf.remaining(),
+            });
+        }
+
+        let message_type = buf.get_u32_le();
+        let text = read_cstring(buf)?;
+
+        Ok(ServerMessage { message_type, text })
     }
 }
 

@@ -484,9 +484,7 @@ impl RealmHandler {
             }
             bytes.push(b);
         }
-        String::from_utf8(bytes).map_err(|e| ProtocolError::InvalidString {
-            message: e.to_string(),
-        })
+        Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 }
 

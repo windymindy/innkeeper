@@ -9,29 +9,17 @@ use crate::common::types::{Guid, GuildEvent, GuildMember};
 use crate::protocol::packets::{PacketDecode, PacketEncode};
 
 /// Guild event IDs from the protocol.
+/// WotLK values
 #[allow(dead_code)]
 pub mod guild_events {
-    pub const GE_PROMOTION: u8 = 0x00;
-    pub const GE_DEMOTION: u8 = 0x01;
+    pub const GE_PROMOTED: u8 = 0x00;
+    pub const GE_DEMOTED: u8 = 0x01;
     pub const GE_MOTD: u8 = 0x02;
     pub const GE_JOINED: u8 = 0x03;
     pub const GE_LEFT: u8 = 0x04;
     pub const GE_REMOVED: u8 = 0x05;
-    pub const GE_LEADER_IS: u8 = 0x06;
-    pub const GE_LEADER_CHANGED: u8 = 0x07;
-    pub const GE_DISBANDED: u8 = 0x08;
-    pub const GE_TABARD_CHANGE: u8 = 0x09;
-    pub const GE_RANK_UPDATED: u8 = 0x0A;
-    pub const GE_RANK_CREATED: u8 = 0x0B;
-    pub const GE_RANK_DELETED: u8 = 0x0C;
     pub const GE_SIGNED_ON: u8 = 0x0C;
     pub const GE_SIGNED_OFF: u8 = 0x0D;
-    pub const GE_BANK_BAG_SLOTS_CHANGED: u8 = 0x0E;
-    pub const GE_BANK_TAB_PURCHASED: u8 = 0x0F;
-    pub const GE_BANK_TAB_UPDATED: u8 = 0x10;
-    pub const GE_BANK_MONEY_SET: u8 = 0x11;
-    pub const GE_BANK_TAB_AND_MONEY_UPDATED: u8 = 0x12;
-    pub const GE_BANK_TEXT_CHANGED: u8 = 0x13;
 }
 
 /// Parsed guild information from SMSG_GUILD_QUERY.
@@ -415,9 +403,7 @@ fn read_cstring(buf: &mut Bytes) -> Result<String, ProtocolError> {
         }
         bytes.push(b);
     }
-    String::from_utf8(bytes).map_err(|e| ProtocolError::InvalidString {
-        message: e.to_string(),
-    })
+    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 #[cfg(test)]

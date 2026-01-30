@@ -48,7 +48,7 @@ pub const CMSG_TIME_SYNC_RESP: u16 = 0x0391;
 // --- Chat ---
 pub const SMSG_MESSAGECHAT: u16 = 0x0096;
 pub const CMSG_MESSAGECHAT: u16 = 0x0095;
-pub const SMSG_GM_MESSAGECHAT: u16 = 0x03B2;
+pub const SMSG_GM_MESSAGECHAT: u16 = 0x03B3;
 
 // --- Channels ---
 pub const CMSG_JOIN_CHANNEL: u16 = 0x0097;
@@ -108,6 +108,10 @@ pub fn opcode_name(opcode: u16) -> &'static str {
         SMSG_NAME_QUERY => "SMSG_NAME_QUERY",
         SMSG_WARDEN_DATA => "SMSG_WARDEN_DATA",
         CMSG_WARDEN_DATA => "CMSG_WARDEN_DATA",
+        SMSG_NOTIFICATION => "SMSG_NOTIFICATION",
+        SMSG_MOTD => "SMSG_MOTD",
+        SMSG_GM_MESSAGECHAT => "SMSG_GM_MESSAGECHAT",
+        SMSG_SERVER_MESSAGE => "SMSG_SERVER_MESSAGE",
         _ => "UNKNOWN",
     }
 }
