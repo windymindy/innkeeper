@@ -4,126 +4,23 @@
 
 use std::sync::Arc;
 
-use serenity::all::{ChannelId, Http};
-use tokio::sync::mpsc;
+use serenity::all::Http;
 use tracing::{debug, error, info, warn};
 
 use crate::config::types::Config;
 use crate::discord::resolver::MessageResolver;
 use crate::game::filter::MessageFilter;
-use crate::game::formatter::{escape_discord_markdown, split_message, FormatContext, MessageFormatter};
+use crate::game::formatter::{
+    escape_discord_markdown, split_message, FormatContext, MessageFormatter,
+};
 use crate::game::router::{MessageRouter, SharedRouter};
 
-/// Message from WoW to be sent to Discord.
-/// This mirrors IncomingWowMessage from discord/handler.rs for compatibility.
-#[derive(Debug, Clone)]
-pub struct WowMessage {
-    /// Sender's name (None for system messages).
-    pub sender: Option<String>,
-    /// Message content.
-    pub content: String,
-    /// WoW chat type.
-    pub chat_type: u8,
-    /// Channel name for custom channels.
-    pub channel_name: Option<String>,
-    /// Custom format override (optional, for backward compatibility).
-    pub format: Option<String>,
-}
-
-impl From<WowMessage> for crate::discord::handler::IncomingWowMessage {
-    fn from(msg: WowMessage) -> Self {
-        Self {
-            sender: msg.sender,
-            content: msg.content,
-            chat_type: msg.chat_type,
-            channel_name: msg.channel_name,
-        }
-    }
-}
-
-/// Message from Discord to be sent to WoW.
-#[derive(Debug, Clone)]
-pub struct DiscordMessage {
-    /// Sender's Discord display name.
-    pub sender: String,
-    /// Message content.
-    pub content: String,
-    /// Discord channel ID.
-    pub channel_id: u64,
-    /// Discord channel name.
-    pub channel_name: String,
-}
-
-/// Command request from Discord.
-#[derive(Debug, Clone)]
-pub enum BridgeCommand {
-    /// Request guild roster (online guildies).
-    Who { reply_channel: u64 },
-    /// Request guild MOTD.
-    Gmotd { reply_channel: u64 },
-}
-
-/// Command response to be sent to Discord.
-/// Re-exported from discord/commands for consistency.
+// Re-export types from common for backwards compatibility
+pub use crate::common::{
+    BridgeChannels, BridgeCommand, DiscordMessage, IncomingWowMessage, OutgoingWowMessage,
+    WowMessage,
+};
 pub use crate::discord::commands::CommandResponse;
-
-/// Message to send to WoW game handler.
-/// Re-exported from discord/handler.rs for consistency.
-pub use crate::discord::handler::OutgoingWowMessage;
-
-/// Channels for bridge communication.
-/// Uses types compatible with discord/handler.rs
-pub struct BridgeChannels {
-    /// Sender for WoW -> Discord messages.
-    pub wow_tx: mpsc::UnboundedSender<WowMessage>,
-    /// Sender for Discord -> WoW messages.
-    pub discord_tx: mpsc::UnboundedSender<DiscordMessage>,
-    /// Receiver for Discord -> WoW messages.
-    pub discord_rx: mpsc::UnboundedReceiver<DiscordMessage>,
-    /// Sender for outgoing WoW messages (to game handler).
-    pub outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
-    /// Receiver for outgoing WoW messages (game handler listens).
-    pub outgoing_wow_rx: mpsc::UnboundedReceiver<OutgoingWowMessage>,
-    /// Sender for commands.
-    pub command_tx: mpsc::UnboundedSender<BridgeCommand>,
-    /// Receiver for commands (game handler listens).
-    pub command_rx: mpsc::UnboundedReceiver<BridgeCommand>,
-    /// Sender for command responses (game handler sends, bridge receives).
-    pub command_response_tx: mpsc::UnboundedSender<CommandResponse>,
-    /// Receiver for command responses (bridge listens).
-    pub command_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
-}
-
-impl BridgeChannels {
-    /// Create a new set of bridge channels.
-    /// Returns the channels struct along with the wow_rx receiver for external forwarding.
-    pub fn new() -> (Self, mpsc::UnboundedReceiver<WowMessage>) {
-        let (wow_tx, wow_rx) = mpsc::unbounded_channel();
-        let (discord_tx, discord_rx) = mpsc::unbounded_channel();
-        let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
-
-        let channels = Self {
-            wow_tx,
-            discord_tx,
-            discord_rx,
-            outgoing_wow_tx,
-            outgoing_wow_rx,
-            command_tx,
-            command_rx,
-            command_response_tx,
-            command_response_rx,
-        };
-
-        (channels, wow_rx)
-    }
-}
-
-
-
-/// Discord channel resolver function type.
-pub type ChannelResolver = Arc<dyn Fn(&str) -> Option<ChannelId> + Send + Sync>;
 
 /// The main bridge that orchestrates message flow.
 pub struct Bridge {
@@ -135,8 +32,6 @@ pub struct Bridge {
     resolver: Arc<MessageResolver>,
     /// Whether dot commands are enabled.
     enable_dot_commands: bool,
-    /// Channel name resolver (set by Discord module).
-    channel_resolver: Option<ChannelResolver>,
 }
 
 impl Bridge {
@@ -169,13 +64,7 @@ impl Bridge {
             filter,
             resolver: Arc::new(MessageResolver::new()),
             enable_dot_commands,
-            channel_resolver: None,
         }
-    }
-
-    /// Set the channel resolver for looking up Discord channel IDs by name.
-    pub fn set_channel_resolver(&mut self, resolver: ChannelResolver) {
-        self.channel_resolver = Some(resolver);
     }
 
     /// Get the router for external use.
@@ -188,103 +77,14 @@ impl Bridge {
         self.router.get_channels_to_join()
     }
 
-    /// Process a message from WoW and send to Discord.
-    pub async fn handle_wow_to_discord(
-        &self,
-        msg: WowMessage,
-        http: &Http,
-    ) {
-        let routes = self.router.get_discord_targets(
-            msg.chat_type,
-            msg.channel_name.as_deref(),
-        );
-
-        if routes.is_empty() {
-            debug!(
-                chat_type = msg.chat_type,
-                channel = ?msg.channel_name,
-                "No Discord route for WoW message"
-            );
-            return;
-        }
-
-        // Pre-process the message: resolve links, strip colors, etc.
-        let processed = self.resolver.resolve_links(&msg.content);
-        let processed = self.resolver.strip_color_coding(&processed);
-        let processed = self.resolver.strip_texture_coding(&processed);
-        // Escape Discord markdown (`, *, _, ~)
-        let processed = if msg.sender.is_some() {
-            escape_discord_markdown(&processed)
-        } else {
-            processed
-        };
-
-        for route in routes {
-            // Resolve Discord channel name to ID
-            let channel_id = if let Some(ref resolver) = self.channel_resolver {
-                match resolver(&route.discord_channel_name) {
-                    Some(id) => id,
-                    None => {
-                        warn!(
-                            channel_name = route.discord_channel_name,
-                            "Could not resolve Discord channel name to ID"
-                        );
-                        continue;
-                    }
-                }
-            } else {
-                warn!("No channel resolver set, cannot send to Discord");
-                continue;
-            };
-
-            // Use route's format or message's format override
-            let format = msg.format.as_ref()
-                .or(route.wow_to_discord_format.as_ref())
-                .cloned()
-                .unwrap_or_else(|| "[%user]: %message".to_string());
-
-            let formatter = MessageFormatter::new(&format);
-            let ctx = FormatContext::new(
-                msg.sender.as_deref().unwrap_or(""),
-                &processed,
-            )
-            .with_channel(msg.channel_name.as_deref().unwrap_or(""));
-
-            let formatted = formatter.format(&ctx);
-
-            // Apply filter
-            if self.filter.should_filter_wow_to_discord(&formatted) {
-                info!(
-                    channel_name = route.discord_channel_name,
-                    "FILTERED WoW->Discord: {}",
-                    formatted
-                );
-                continue;
-            }
-
-            info!(
-                channel_name = route.discord_channel_name,
-                "WoW->Discord: {}",
-                formatted
-            );
-
-            if let Err(e) = channel_id.say(http, &formatted).await {
-                error!(
-                    channel_name = route.discord_channel_name,
-                    error = %e,
-                    "Failed to send message to Discord"
-                );
-            }
-        }
-    }
+    // Note: handle_wow_to_discord and related loop functions are currently unused
+    // and need refactoring. The Discord module handles message forwarding directly.
+    // TODO: Clean up or re-implement these methods as part of structural refactoring.
 
     /// Process a message from Discord and prepare for WoW.
     ///
     /// Returns the messages to send to WoW, already formatted and split if needed.
-    pub fn handle_discord_to_wow(
-        &self,
-        msg: &DiscordMessage,
-    ) -> Vec<OutgoingWowMessage> {
+    pub fn handle_discord_to_wow(&self, msg: &DiscordMessage) -> Vec<OutgoingWowMessage> {
         let routes = self.router.get_wow_targets(&msg.channel_name);
 
         if routes.is_empty() {
@@ -300,7 +100,7 @@ impl Bridge {
         for route in routes {
             // Check for dot commands: messages starting with "." that should be sent directly
             let is_dot_command = self.enable_dot_commands && msg.content.starts_with('.');
-            
+
             if is_dot_command {
                 // Send the content directly without formatting
                 results.push(OutgoingWowMessage {
@@ -313,12 +113,14 @@ impl Bridge {
             }
 
             // Get format and create formatter
-            let format = route.discord_to_wow_format.as_ref()
+            let format = route
+                .discord_to_wow_format
+                .as_ref()
                 .cloned()
                 .unwrap_or_else(|| "%user: %message".to_string());
-            
+
             let formatter = MessageFormatter::new(&format);
-            
+
             // Calculate max message length and split if needed
             let max_len = formatter.max_message_length(&msg.sender, 255);
             let chunks = split_message(&msg.content, max_len);
@@ -356,70 +158,17 @@ impl Bridge {
     }
 }
 
-/// Run the WoW -> Discord message forwarding loop.
-pub async fn run_wow_to_discord_loop(
-    bridge: Arc<Bridge>,
-    mut wow_rx: mpsc::UnboundedReceiver<WowMessage>,
-    http: Arc<Http>,
-) {
-    info!("Starting WoW -> Discord message loop");
-
-    while let Some(msg) = wow_rx.recv().await {
-        bridge.handle_wow_to_discord(msg, &http).await;
-    }
-
-    warn!("WoW -> Discord message loop ended");
-}
-
-/// Run the Discord -> WoW message forwarding loop.
-pub async fn run_discord_to_wow_loop(
-    bridge: Arc<Bridge>,
-    mut discord_rx: mpsc::UnboundedReceiver<DiscordMessage>,
-    outgoing_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
-) {
-    info!("Starting Discord -> WoW message loop");
-
-    while let Some(msg) = discord_rx.recv().await {
-        let messages = bridge.handle_discord_to_wow(&msg);
-        for outgoing in messages {
-            if outgoing_tx.send(outgoing).is_err() {
-                error!("Failed to send message to WoW handler - channel closed");
-                return;
-            }
-        }
-    }
-
-    warn!("Discord -> WoW message loop ended");
-}
-
-/// Run the command response loop (sends command responses to Discord).
-pub async fn run_command_response_loop(
-    mut response_rx: mpsc::UnboundedReceiver<CommandResponse>,
-    http: Arc<Http>,
-) {
-    info!("Starting command response loop");
-
-    while let Some(response) = response_rx.recv().await {
-        let channel_id = ChannelId::new(response.channel_id);
-        
-        if let Err(e) = channel_id.say(&http, &response.content).await {
-            error!(
-                channel_id = response.channel_id,
-                error = %e,
-                "Failed to send command response to Discord"
-            );
-        }
-    }
-
-    warn!("Command response loop ended");
-}
+// Note: The following loop functions (run_wow_to_discord_loop, run_discord_to_wow_loop,
+// run_command_response_loop) have been removed as they are unused.
+// Message forwarding is currently handled directly by the Discord handler module.
+// See documentation/003_refactoring_plan.md for architectural notes.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::types::{
-        ChannelMapping, ChatConfig, DiscordChannelConfig, DiscordConfig,
-        GuildDashboardConfig, GuildEventsConfig, QuirksConfig, WowChannelConfig, WowConfig,
+        ChannelMapping, ChatConfig, DiscordChannelConfig, DiscordConfig, GuildDashboardConfig,
+        GuildEventsConfig, QuirksConfig, WowChannelConfig, WowConfig,
     };
 
     fn make_test_config() -> Config {
@@ -445,20 +194,18 @@ mod tests {
             },
             guild: GuildEventsConfig::default(),
             chat: ChatConfig {
-                channels: vec![
-                    ChannelMapping {
-                        direction: "both".to_string(),
-                        wow: WowChannelConfig {
-                            channel_type: "Guild".to_string(),
-                            channel: None,
-                            format: Some("[%user]: %message".to_string()),
-                        },
-                        discord: DiscordChannelConfig {
-                            channel: "guild-chat".to_string(),
-                            format: Some("[%user]: %message".to_string()),
-                        },
+                channels: vec![ChannelMapping {
+                    direction: "both".to_string(),
+                    wow: WowChannelConfig {
+                        channel_type: "Guild".to_string(),
+                        channel: None,
+                        format: Some("[%user]: %message".to_string()),
                     },
-                ],
+                    discord: DiscordChannelConfig {
+                        channel: "guild-chat".to_string(),
+                        format: Some("[%user]: %message".to_string()),
+                    },
+                }],
             },
             filters: None,
             guild_dashboard: GuildDashboardConfig::default(),

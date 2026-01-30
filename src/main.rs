@@ -16,11 +16,10 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use config::{load_and_validate, env::get_config_path};
+use common::{BridgeChannels, BridgeCommand, IncomingWowMessage, OutgoingWowMessage, WowMessage};
 use discord::{
-    CommandResponse, DiscordBotBuilder, DiscordChannels, IncomingWowMessage, OutgoingWowMessage,
-    WowCommand,
+    CommandResponse, DiscordBotBuilder, DiscordChannels, WowCommand,
 };
-use game::bridge::{BridgeChannels, BridgeCommand};
 use game::GameClient;
 use protocol::realm::connector::connect_and_authenticate;
 
@@ -61,24 +60,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (realm_host, realm_port) = config.get_realm_host_port();
 
     // ============================================================
-    // Create channels for Discord <-> WoW communication
+    // Create channels for communication
     // ============================================================
 
-    // Discord -> Game messages
-    let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel::<OutgoingWowMessage>();
+    // Create bridge channels (single source of truth)
+    let (game_channels, wow_rx, command_tx, cmd_response_rx) = BridgeChannels::new();
 
-    // Discord commands -> Game commands
-    let (discord_command_tx, mut discord_command_rx) = mpsc::unbounded_channel::<WowCommand>();
-    let (game_command_tx, game_command_rx) = mpsc::unbounded_channel::<BridgeCommand>();
+    // Clone senders needed for Discord bot
+    let outgoing_wow_tx = game_channels.outgoing_wow_tx.clone();
 
-    // Command responses (Game -> Discord)
-    let (cmd_response_tx, cmd_response_rx) = mpsc::unbounded_channel::<CommandResponse>();
-
-    // WoW -> Discord messages
+    // WoW -> Discord forwarding channel
     let (wow_to_discord_tx, wow_to_discord_rx) = mpsc::unbounded_channel::<IncomingWowMessage>();
 
-    // Game client channels
-    let (game_bridge_channels, game_wow_rx) = BridgeChannels::new();
+    // Discord commands channel
+    let (discord_command_tx, mut discord_command_rx) = mpsc::unbounded_channel::<WowCommand>();
 
     // ============================================================
     // Create Discord bot
@@ -99,57 +94,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn forwarding tasks
     // ============================================================
 
-    // Task 1: Game -> Discord
-    let forward_to_discord = tokio::spawn(async move {
-        let mut game_rx = game_wow_rx;
+    // Task 1: Game -> Discord (convert WowMessage to IncomingWowMessage)
+    let forward_to_discord = {
+        let mut game_rx = wow_rx;
         let discord_tx = wow_to_discord_tx;
-
-        while let Some(msg) = game_rx.recv().await {
-            let incoming = IncomingWowMessage {
-                sender: msg.sender,
-                content: msg.content,
-                chat_type: msg.chat_type,
-                channel_name: msg.channel_name,
-            };
-
-            if let Err(e) = discord_tx.send(incoming) {
-                error!("Failed to forward message to Discord: {}", e);
-                break;
+        tokio::spawn(async move {
+            while let Some(msg) = game_rx.recv().await {
+                let incoming: IncomingWowMessage = msg.into();
+                if let Err(e) = discord_tx.send(incoming) {
+                    error!("Failed to forward message to Discord: {}", e);
+                    break;
+                }
             }
-        }
-        info!("Game->Discord forwarding task ended");
-    });
+            info!("Game->Discord forwarding task ended");
+        })
+    };
 
     // Task 2: Command responses -> Discord
-    let forward_cmd_responses = tokio::spawn(async move {
+    let forward_cmd_responses = {
         let mut rx = cmd_response_rx;
-        while let Some(response) = rx.recv().await {
-            if let Err(e) = discord::send_command_response(&discord_http, response.channel_id, &response.content).await {
-                error!("Failed to send command response: {}", e);
+        let http = discord_http.clone();
+        tokio::spawn(async move {
+            while let Some(response) = rx.recv().await {
+                if let Err(e) = discord::send_command_response(&http, response.channel_id, &response.content).await {
+                    error!("Failed to send command response: {}", e);
+                }
             }
-        }
-        info!("Command response task ended");
-    });
+            info!("Command response task ended");
+        })
+    };
 
     // Task 3: Command converter (Discord commands -> Game commands)
-    let command_converter = tokio::spawn(async move {
-        while let Some(cmd) = discord_command_rx.recv().await {
-            let bridge_cmd = match cmd {
-                WowCommand::Who { args: _, reply_channel } => {
-                    BridgeCommand::Who { reply_channel }
-                }
-                WowCommand::GuildMotd { reply_channel } => {
-                    BridgeCommand::Gmotd { reply_channel }
-                }
-            };
+    let command_converter = {
+        let cmd_tx = command_tx;
+        tokio::spawn(async move {
+            while let Some(cmd) = discord_command_rx.recv().await {
+                let bridge_cmd = match cmd {
+                    WowCommand::Who { args: _, reply_channel } => {
+                        BridgeCommand::Who { reply_channel }
+                    }
+                    WowCommand::GuildMotd { reply_channel } => {
+                        BridgeCommand::Gmotd { reply_channel }
+                    }
+                };
 
-            if let Err(e) = game_command_tx.send(bridge_cmd) {
-                error!("Failed to forward command: {}", e);
-                break;
+                if let Err(e) = cmd_tx.send(bridge_cmd) {
+                    error!("Failed to forward command: {}", e);
+                    break;
+                }
             }
-        }
-        info!("Command converter ended");
-    });
+            info!("Command converter ended");
+        })
+    };
 
     // ============================================================
     // Connect to WoW realm
@@ -167,27 +163,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Realm authentication successful!");
 
     // ============================================================
-    // Create game client channels
-    // ============================================================
-    let game_bridge_channels = {
-        let (game_discord_tx, game_discord_rx) = mpsc::unbounded_channel();
-        let (game_cmd_tx, _game_cmd_rx) = mpsc::unbounded_channel::<BridgeCommand>();
-        let (_dummy_tx, dummy_rx) = mpsc::unbounded_channel::<CommandResponse>();
-
-        BridgeChannels {
-            wow_tx: game_bridge_channels.wow_tx,
-            discord_tx: game_discord_tx,
-            discord_rx: game_discord_rx,
-            outgoing_wow_tx: outgoing_wow_tx.clone(),
-            outgoing_wow_rx,
-            command_tx: game_cmd_tx,
-            command_rx: game_command_rx,
-            command_response_tx: cmd_response_tx,
-            command_response_rx: dummy_rx,
-        }
-    };
-
-    // ============================================================
     // Start game client
     // ============================================================
     let bridge = Arc::new(game::Bridge::new(&config));
@@ -201,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut game_client = GameClient::new(
         config.clone(),
         session,
-        game_bridge_channels,
+        game_channels,
         channels_to_join,
     );
 

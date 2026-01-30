@@ -11,4 +11,5 @@ pub mod resolver;
 // Re-export main types for external use
 pub use client::{send_command_response, DiscordBot, DiscordBotBuilder, DiscordChannels};
 pub use commands::{CommandResponse, WowCommand};
-pub use handler::{IncomingWowMessage, OutgoingWowMessage};
+// Re-export from common for backwards compatibility
+pub use crate::common::{IncomingWowMessage, OutgoingWowMessage};

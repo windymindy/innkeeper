@@ -16,6 +16,7 @@ use serenity::prelude::*;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::common::{IncomingWowMessage, OutgoingWowMessage};
 use crate::discord::commands::{CommandHandler, WowCommand};
 use crate::discord::resolver::MessageResolver;
 use crate::game::filter::MessageFilter;
@@ -29,24 +30,6 @@ pub struct ChannelConfig {
     pub wow_channel_name: Option<String>,
     pub format_wow_to_discord: String,
     pub format_discord_to_wow: String,
-}
-
-/// Message from Discord destined for WoW.
-#[derive(Debug, Clone)]
-pub struct OutgoingWowMessage {
-    pub chat_type: u8,
-    pub channel_name: Option<String>,
-    pub sender: String,
-    pub content: String,
-}
-
-/// Message from WoW destined for Discord.
-#[derive(Debug, Clone)]
-pub struct IncomingWowMessage {
-    pub sender: Option<String>,
-    pub content: String,
-    pub chat_type: u8,
-    pub channel_name: Option<String>,
 }
 
 /// Shared state accessible from the event handler.
@@ -409,20 +392,4 @@ impl EventHandler for BridgeHandler {
             }
         }
     }
-}
-
-/// Create channels for the bridge communication.
-pub fn create_bridge_channels() -> (
-    mpsc::UnboundedSender<OutgoingWowMessage>,
-    mpsc::UnboundedReceiver<OutgoingWowMessage>,
-    mpsc::UnboundedSender<IncomingWowMessage>,
-    mpsc::UnboundedReceiver<IncomingWowMessage>,
-    mpsc::UnboundedSender<WowCommand>,
-    mpsc::UnboundedReceiver<WowCommand>,
-) {
-    let (wow_tx, wow_rx) = mpsc::unbounded_channel();
-    let (discord_tx, discord_rx) = mpsc::unbounded_channel();
-    let (command_tx, command_rx) = mpsc::unbounded_channel();
-
-    (wow_tx, wow_rx, discord_tx, discord_rx, command_tx, command_rx)
 }

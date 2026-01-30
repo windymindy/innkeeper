@@ -13,18 +13,19 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
+use crate::common::{IncomingWowMessage, OutgoingWowMessage};
 use crate::config::types::Config;
 use crate::game::router::WowChannel;
 
 use super::commands::WowCommand;
-use super::handler::{BridgeHandler, BridgeState, ChannelConfig, IncomingWowMessage};
+use super::handler::{BridgeHandler, BridgeState, ChannelConfig};
 use super::resolver::MessageResolver;
 use crate::game::filter::MessageFilter;
 
 /// Channels for Discord bot communication.
 pub struct DiscordChannels {
     /// Sender for outgoing WoW messages (Discord -> WoW).
-    pub outgoing_wow_tx: mpsc::UnboundedSender<super::handler::OutgoingWowMessage>,
+    pub outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
     /// Receiver for incoming WoW messages (WoW -> Discord).
     pub wow_to_discord_rx: mpsc::UnboundedReceiver<IncomingWowMessage>,
     /// Sender for commands from Discord.
@@ -183,7 +184,7 @@ pub struct DiscordBot {
     http: Arc<Http>,
     config: ClientConfig,
     // Keep senders to create new receivers for reconnection
-    outgoing_wow_tx: mpsc::UnboundedSender<super::handler::OutgoingWowMessage>,
+    outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
     command_tx: mpsc::UnboundedSender<WowCommand>,
 }
 

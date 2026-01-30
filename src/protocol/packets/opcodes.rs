@@ -18,6 +18,77 @@ pub mod realm {
     pub const REALM_LIST: u8 = 0x10;
 }
 
+/// Authentication response codes from game server.
+#[allow(dead_code)]
+pub mod auth_response {
+    pub const AUTH_OK: u8 = 0x0C;
+    pub const AUTH_FAILED: u8 = 0x0D;
+    pub const AUTH_REJECT: u8 = 0x0E;
+    pub const AUTH_BAD_SERVER_PROOF: u8 = 0x0F;
+    pub const AUTH_UNAVAILABLE: u8 = 0x10;
+    pub const AUTH_SYSTEM_ERROR: u8 = 0x11;
+    pub const AUTH_BILLING_ERROR: u8 = 0x12;
+    pub const AUTH_BILLING_EXPIRED: u8 = 0x13;
+    pub const AUTH_VERSION_MISMATCH: u8 = 0x14;
+    pub const AUTH_UNKNOWN_ACCOUNT: u8 = 0x15;
+    pub const AUTH_INCORRECT_PASSWORD: u8 = 0x16;
+    pub const AUTH_SESSION_EXPIRED: u8 = 0x17;
+    pub const AUTH_SERVER_SHUTTING_DOWN: u8 = 0x18;
+    pub const AUTH_ALREADY_LOGGING_IN: u8 = 0x19;
+    pub const AUTH_LOGIN_SERVER_NOT_FOUND: u8 = 0x1A;
+    pub const AUTH_WAIT_QUEUE: u8 = 0x1B;
+    pub const AUTH_BANNED: u8 = 0x1C;
+    pub const AUTH_ALREADY_ONLINE: u8 = 0x1D;
+    pub const AUTH_NO_TIME: u8 = 0x1E;
+    pub const AUTH_DB_BUSY: u8 = 0x1F;
+    pub const AUTH_SUSPENDED: u8 = 0x20;
+    pub const AUTH_PARENTAL_CONTROL: u8 = 0x21;
+    pub const AUTH_LOCKED_ENFORCED: u8 = 0x22;
+
+    /// Get a human-readable name for an auth response code.
+    pub fn code_name(code: u8) -> &'static str {
+        match code {
+            AUTH_OK => "AUTH_OK",
+            AUTH_FAILED => "AUTH_FAILED",
+            AUTH_REJECT => "AUTH_REJECT",
+            AUTH_BAD_SERVER_PROOF => "AUTH_BAD_SERVER_PROOF",
+            AUTH_UNAVAILABLE => "AUTH_UNAVAILABLE",
+            AUTH_SYSTEM_ERROR => "AUTH_SYSTEM_ERROR",
+            AUTH_BILLING_ERROR => "AUTH_BILLING_ERROR",
+            AUTH_BILLING_EXPIRED => "AUTH_BILLING_EXPIRED",
+            AUTH_VERSION_MISMATCH => "AUTH_VERSION_MISMATCH",
+            AUTH_UNKNOWN_ACCOUNT => "AUTH_UNKNOWN_ACCOUNT",
+            AUTH_INCORRECT_PASSWORD => "AUTH_INCORRECT_PASSWORD",
+            AUTH_SESSION_EXPIRED => "AUTH_SESSION_EXPIRED",
+            AUTH_SERVER_SHUTTING_DOWN => "AUTH_SERVER_SHUTTING_DOWN",
+            AUTH_ALREADY_LOGGING_IN => "AUTH_ALREADY_LOGGING_IN",
+            AUTH_LOGIN_SERVER_NOT_FOUND => "AUTH_LOGIN_SERVER_NOT_FOUND",
+            AUTH_WAIT_QUEUE => "AUTH_WAIT_QUEUE",
+            AUTH_BANNED => "AUTH_BANNED",
+            AUTH_ALREADY_ONLINE => "AUTH_ALREADY_ONLINE",
+            AUTH_NO_TIME => "AUTH_NO_TIME",
+            AUTH_DB_BUSY => "AUTH_DB_BUSY",
+            AUTH_SUSPENDED => "AUTH_SUSPENDED",
+            AUTH_PARENTAL_CONTROL => "AUTH_PARENTAL_CONTROL",
+            AUTH_LOCKED_ENFORCED => "AUTH_LOCKED_ENFORCED",
+            _ => "UNKNOWN",
+        }
+    }
+
+    /// Get a user-friendly error message for an auth response code.
+    pub fn error_message(code: u8) -> &'static str {
+        match code {
+            AUTH_OK => "Success!",
+            AUTH_UNKNOWN_ACCOUNT | AUTH_INCORRECT_PASSWORD => "Incorrect username or password!",
+            AUTH_VERSION_MISMATCH => "Invalid game version for this server!",
+            AUTH_BANNED => "Your account has been banned!",
+            AUTH_ALREADY_LOGGING_IN | AUTH_ALREADY_ONLINE => "Your account is already online! Log it off or wait a minute if already logging off.",
+            AUTH_SUSPENDED => "Your account has been suspended!",
+            _ => "Failed to login to game server!",
+        }
+    }
+}
+
 // ============================================================================
 // Game Server Opcodes (WotLK 3.3.5a)
 // ============================================================================

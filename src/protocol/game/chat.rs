@@ -103,6 +103,17 @@ pub mod languages {
     pub const LANG_ADDON: u32 = 0xFFFFFFFF; // -1 as u32
 }
 
+/// Pre-defined channel IDs for standard WoW channels.
+#[allow(dead_code)]
+pub mod channel_ids {
+    pub const GENERAL: u32 = 0x01;
+    pub const TRADE: u32 = 0x02;
+    pub const LOCAL_DEFENSE: u32 = 0x16;
+    pub const WORLD_DEFENSE: u32 = 0x17;
+    pub const GUILD_RECRUITMENT: u32 = 0x19; // TBC/WotLK
+    pub const LOOKING_FOR_GROUP: u32 = 0x1A;
+}
+
 /// SMSG_MESSAGECHAT packet data.
 #[derive(Debug, Clone)]
 pub struct MessageChat {

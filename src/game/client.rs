@@ -1,23 +1,21 @@
 use futures::{SinkExt, StreamExt};
-use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tracing::{error, info, warn};
 
+use crate::common::{BridgeChannels, BridgeCommand, WowMessage};
 use crate::config::types::Config;
-use crate::game::bridge::{BridgeChannels, WowMessage};
+use crate::discord::commands::CommandResponse;
 use crate::protocol::game::{new_game_connection, GameHandler};
+use crate::protocol::game::chat::chat_events;
 use crate::protocol::packets::opcodes::{
-    CMSG_AUTH_SESSION, CMSG_GUILD_QUERY, CMSG_GUILD_ROSTER, CMSG_MESSAGECHAT, CMSG_PLAYER_LOGIN,
     SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_GM_MESSAGECHAT,
     SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_LOGIN_VERIFY_WORLD, SMSG_MESSAGECHAT,
     SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE,
 };
 use crate::protocol::packets::PacketDecode;
 use crate::protocol::realm::connector::RealmSession;
-use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, CharEnumRequest, LoginVerifyWorld, Pong};
-use crate::protocol::game::chat::SendChatMessage;
-use tokio_util::codec::{Framed, FramedParts};
+use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, LoginVerifyWorld, Pong};
 
 pub struct GameClient {
     config: Config,
@@ -186,7 +184,7 @@ impl GameClient {
                                         let wow_msg = WowMessage {
                                             sender: None, // System message
                                             content: notification,
-                                            chat_type: 0x04, // CHAT_MSG_GUILD - route to guild channel
+                                            chat_type: chat_events::CHAT_MSG_GUILD,
                                             channel_name: None,
                                             format: None,
                                         };
@@ -201,7 +199,7 @@ impl GameClient {
                                         let wow_msg = WowMessage {
                                             sender: None,
                                             content: msg,
-                                            chat_type: 0x00, // CHAT_MSG_SYSTEM
+                                            chat_type: chat_events::CHAT_MSG_SYSTEM,
                                             channel_name: None,
                                             format: None,
                                         };
@@ -216,7 +214,7 @@ impl GameClient {
                                         let wow_msg = WowMessage {
                                             sender: None,
                                             content: msg,
-                                            chat_type: 0x00, // CHAT_MSG_SYSTEM
+                                            chat_type: chat_events::CHAT_MSG_SYSTEM,
                                             channel_name: None,
                                             format: None,
                                         };
@@ -261,7 +259,7 @@ impl GameClient {
                                         let wow_msg = WowMessage {
                                             sender: None,
                                             content: msg,
-                                            chat_type: 0x00, // CHAT_MSG_SYSTEM
+                                            chat_type: chat_events::CHAT_MSG_SYSTEM,
                                             channel_name: None,
                                             format: None,
                                         };
@@ -307,7 +305,6 @@ impl GameClient {
                 }
                 // Commands from Discord (!who, !gmotd)
                 Some(command) = self.channels.command_rx.recv() => {
-                    use crate::game::bridge::{BridgeCommand, CommandResponse};
                     match command {
                         BridgeCommand::Who { reply_channel } => {
                             let response = handler.get_online_guildies();
@@ -398,7 +395,7 @@ mod tests {
     async fn test_auth_flow() {
         let config = make_test_config();
         let session = make_test_session();
-        let (channels, _wow_rx) = BridgeChannels::new();
+        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx) = BridgeChannels::new();
         let mut client = GameClient::new(config, session, channels, Vec::new());
 
         let (client_stream, mut server_stream) = tokio::io::duplex(4096);
