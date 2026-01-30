@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use serenity::all::ChannelId;
 
+use crate::common::types::ChatType;
 use crate::config::types::{ChannelMapping, ChatConfig, WowChannelConfig};
 use crate::protocol::game::chat::chat_events;
 
@@ -42,125 +43,22 @@ impl Direction {
     }
 }
 
-/// WoW channel identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum WowChannel {
-    /// Guild chat.
-    Guild,
-    /// Officer chat.
-    Officer,
-    /// Say (local) chat.
-    Say,
-    /// Yell chat.
-    Yell,
-    /// Emote.
-    Emote,
-    /// Whisper to/from a specific player.
-    Whisper,
-    /// Custom channel (e.g., "World", "Trade").
-    Custom(String),
-    /// System message.
-    System,
-    /// Achievement.
-    Achievement,
-    /// Guild achievement.
-    GuildAchievement,
-}
-
-impl WowChannel {
-    /// Parse a WoW channel from config string.
-    pub fn from_config(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "guild" => WowChannel::Guild,
-            "officer" => WowChannel::Officer,
-            "say" => WowChannel::Say,
-            "yell" => WowChannel::Yell,
-            "emote" => WowChannel::Emote,
-            "whisper" => WowChannel::Whisper,
-            "system" => WowChannel::System,
-            "achievement" => WowChannel::Achievement,
-            "guild_achievement" => WowChannel::GuildAchievement,
-            _ => WowChannel::Custom(s.to_string()),
-        }
-    }
-
-    /// Parse a WoW channel from WowChannelConfig.
-    pub fn from_channel_config(config: &WowChannelConfig) -> Self {
-        match config.channel_type.to_lowercase().as_str() {
-            "guild" => WowChannel::Guild,
-            "officer" => WowChannel::Officer,
-            "say" => WowChannel::Say,
-            "yell" => WowChannel::Yell,
-            "emote" => WowChannel::Emote,
-            "whisper" => WowChannel::Whisper,
-            "system" => WowChannel::System,
-            "achievement" => WowChannel::Achievement,
-            "guild_achievement" => WowChannel::GuildAchievement,
-            "channel" => {
-                // For custom channels, use the channel name if provided
-                if let Some(ref name) = config.channel {
-                    WowChannel::Custom(name.clone())
-                } else {
-                    WowChannel::Custom("Unknown".to_string())
-                }
-            }
-            _ => {
-                // For unknown types, use channel name if available
-                if let Some(ref name) = config.channel {
-                    WowChannel::Custom(name.clone())
-                } else {
-                    WowChannel::Custom(config.channel_type.clone())
-                }
-            }
-        }
-    }
-
-    /// Get the chat message type byte for this channel.
-    pub fn to_chat_type(&self) -> u8 {
-        match self {
-            WowChannel::Guild => chat_events::CHAT_MSG_GUILD,
-            WowChannel::Officer => chat_events::CHAT_MSG_OFFICER,
-            WowChannel::Say => chat_events::CHAT_MSG_SAY,
-            WowChannel::Yell => chat_events::CHAT_MSG_YELL,
-            WowChannel::Emote => chat_events::CHAT_MSG_EMOTE,
-            WowChannel::Whisper => chat_events::CHAT_MSG_WHISPER,
-            WowChannel::Custom(_) => chat_events::CHAT_MSG_CHANNEL,
-            WowChannel::System => chat_events::CHAT_MSG_SYSTEM,
-            WowChannel::Achievement => chat_events::CHAT_MSG_ACHIEVEMENT,
-            WowChannel::GuildAchievement => chat_events::CHAT_MSG_GUILD_ACHIEVEMENT,
-        }
-    }
-
-    /// Create from chat type byte and optional channel name.
-    pub fn from_chat_type(chat_type: u8, channel_name: Option<&str>) -> Self {
-        match chat_type {
-            chat_events::CHAT_MSG_GUILD => WowChannel::Guild,
-            chat_events::CHAT_MSG_OFFICER => WowChannel::Officer,
-            chat_events::CHAT_MSG_SAY => WowChannel::Say,
-            chat_events::CHAT_MSG_YELL => WowChannel::Yell,
-            chat_events::CHAT_MSG_EMOTE | chat_events::CHAT_MSG_TEXT_EMOTE => WowChannel::Emote,
-            chat_events::CHAT_MSG_WHISPER | chat_events::CHAT_MSG_WHISPER_INFORM => {
-                WowChannel::Whisper
-            }
-            chat_events::CHAT_MSG_CHANNEL => {
-                if let Some(name) = channel_name {
-                    WowChannel::Custom(name.to_string())
-                } else {
-                    WowChannel::Custom("Unknown".to_string())
-                }
-            }
-            chat_events::CHAT_MSG_SYSTEM => WowChannel::System,
-            chat_events::CHAT_MSG_ACHIEVEMENT => WowChannel::Achievement,
-            chat_events::CHAT_MSG_GUILD_ACHIEVEMENT => WowChannel::GuildAchievement,
-            _ => WowChannel::System, // Default to system for unknown types
-        }
-    }
-
-    /// Get the channel name if this is a custom channel.
-    pub fn channel_name(&self) -> Option<&str> {
-        match self {
-            WowChannel::Custom(name) => Some(name),
-            _ => None,
+/// Parse a ChatType from WowChannelConfig, matching Scala's parse() function.
+/// Corresponds to GamePackets.ChatEvents.parse() in the Scala code.
+pub fn parse_channel_config(config: &WowChannelConfig) -> (ChatType, Option<String>) {
+    match config.channel_type.to_lowercase().as_str() {
+        "system" => (ChatType::System, None),
+        "say" => (ChatType::Say, None),
+        "guild" => (ChatType::Guild, None),
+        "officer" => (ChatType::Officer, None),
+        "yell" => (ChatType::Yell, None),
+        "emote" => (ChatType::Emote, None),
+        "whisper" => (ChatType::Whisper, None),
+        "whispering" => (ChatType::WhisperInform, None),
+        "channel" | "custom" => (ChatType::Channel, config.channel.clone()),
+        _ => {
+            // For unknown types, default to custom channel with the type as name
+            (ChatType::Channel, Some(config.channel_type.clone()))
         }
     }
 }
@@ -168,8 +66,10 @@ impl WowChannel {
 /// A configured route between WoW and Discord channels.
 #[derive(Debug, Clone)]
 pub struct Route {
-    /// WoW channel.
-    pub wow_channel: WowChannel,
+    /// WoW chat type.
+    pub chat_type: ChatType,
+    /// WoW channel name (for custom channels).
+    pub wow_channel_name: Option<String>,
     /// Discord channel name.
     pub discord_channel_name: String,
     /// Message flow direction.
@@ -198,11 +98,12 @@ struct WowChannelKey {
     channel_name: Option<String>,
 }
 
-impl From<&WowChannel> for WowChannelKey {
-    fn from(channel: &WowChannel) -> Self {
+impl WowChannelKey {
+    /// Create a key from chat type and channel name.
+    fn new(chat_type: ChatType, channel_name: Option<&str>) -> Self {
         WowChannelKey {
-            chat_type: channel.to_chat_type(),
-            channel_name: channel.channel_name().map(|s| s.to_lowercase()),
+            chat_type: chat_type.to_id(),
+            channel_name: channel_name.map(|s| s.to_lowercase()),
         }
     }
 }
@@ -215,8 +116,11 @@ impl MessageRouter {
         let mut discord_to_wow: HashMap<String, Vec<usize>> = HashMap::new();
 
         for mapping in &config.channels {
+            let (chat_type, wow_channel_name) = parse_channel_config(&mapping.wow);
+
             let route = Route {
-                wow_channel: WowChannel::from_channel_config(&mapping.wow),
+                chat_type,
+                wow_channel_name: wow_channel_name.clone(),
                 discord_channel_name: mapping.discord.channel.clone(),
                 direction: Direction::from_str(&mapping.direction),
                 wow_to_discord_format: mapping.wow.format.clone(),
@@ -228,7 +132,7 @@ impl MessageRouter {
 
             // Build WoW -> Discord index
             if route.direction.allows_wow_to_discord() {
-                let key = WowChannelKey::from(&route.wow_channel);
+                let key = WowChannelKey::new(route.chat_type, route.wow_channel_name.as_deref());
                 wow_to_discord.entry(key).or_default().push(idx);
             }
 
@@ -278,30 +182,17 @@ impl MessageRouter {
             .unwrap_or_default()
     }
 
-    /// Check if a Discord channel is mapped for sending to WoW.
-    pub fn has_discord_mapping(&self, discord_channel_name: &str) -> bool {
-        self.discord_to_wow.contains_key(discord_channel_name)
-    }
-
-    /// Check if a WoW channel is mapped for sending to Discord.
-    pub fn has_wow_mapping(&self, chat_type: u8, channel_name: Option<&str>) -> bool {
-        let key = WowChannelKey {
-            chat_type,
-            channel_name: channel_name.map(|s| s.to_lowercase()),
-        };
-        self.wow_to_discord.contains_key(&key)
-    }
-
-    /// Get all routes.
-    pub fn routes(&self) -> &[Route] {
-        &self.routes
-    }
-
     /// Get custom channel names that need to be joined.
     pub fn get_channels_to_join(&self) -> Vec<&str> {
         self.routes
             .iter()
-            .filter_map(|r| r.wow_channel.channel_name())
+            .filter_map(|r| {
+                if r.chat_type == ChatType::Channel {
+                    r.wow_channel_name.as_deref()
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 }
@@ -333,14 +224,32 @@ mod tests {
     }
 
     #[test]
-    fn test_wow_channel_parsing() {
-        assert_eq!(WowChannel::from_config("guild"), WowChannel::Guild);
-        assert_eq!(WowChannel::from_config("GUILD"), WowChannel::Guild);
-        assert_eq!(WowChannel::from_config("officer"), WowChannel::Officer);
-        assert_eq!(
-            WowChannel::from_config("World"),
-            WowChannel::Custom("World".to_string())
-        );
+    fn test_parse_channel_config() {
+        let config = WowChannelConfig {
+            channel_type: "guild".to_string(),
+            channel: None,
+            format: None,
+        };
+        let (chat_type, channel_name) = parse_channel_config(&config);
+        assert_eq!(chat_type, ChatType::Guild);
+        assert_eq!(channel_name, None);
+
+        let config = WowChannelConfig {
+            channel_type: "GUILD".to_string(),
+            channel: None,
+            format: None,
+        };
+        let (chat_type, _) = parse_channel_config(&config);
+        assert_eq!(chat_type, ChatType::Guild);
+
+        let config = WowChannelConfig {
+            channel_type: "channel".to_string(),
+            channel: Some("World".to_string()),
+            format: None,
+        };
+        let (chat_type, channel_name) = parse_channel_config(&config);
+        assert_eq!(chat_type, ChatType::Channel);
+        assert_eq!(channel_name, Some("World".to_string()));
     }
 
     #[test]
@@ -384,7 +293,7 @@ mod tests {
         let targets = router.get_wow_targets("officer-chat");
 
         assert_eq!(targets.len(), 1);
-        assert!(matches!(targets[0].wow_channel, WowChannel::Officer));
+        assert_eq!(targets[0].chat_type, ChatType::Officer);
     }
 
     #[test]

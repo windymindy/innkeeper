@@ -337,20 +337,6 @@ case class DiscordChannelConfig(..., filters: Option[FiltersConfig])
 
 ### Known Limitations (Documented)
 
-| File | Changes |
-|------|---------|
-| `src/common/mod.rs` | Add `messages` module |
-| `src/common/messages.rs` | NEW - Canonical message types |
-| `src/common/resources.rs` | Add Goblin race, Monk class |
-| `src/common/types.rs` | Potentially merge with messages.rs |
-| `src/main.rs` | Remove duplicate channel creation |
-| `src/game/bridge.rs` | Remove duplicate types, use common/messages |
-| `src/game/client.rs` | Use chat_events constants |
-| `src/discord/handler.rs` | Remove duplicate types, use common/messages |
-| `src/discord/mod.rs` | Update re-exports |
-| `src/game/mod.rs` | Update re-exports |
-### Known Limitations (Documented)
-
 1. **No locale support** - Ascension uses enUS only
 2. **Version/build hardcoded** - 3.3.5 only (correct for Ascension)
 3. **No per-channel filters** - Global filters only

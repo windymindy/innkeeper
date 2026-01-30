@@ -23,4 +23,4 @@ pub use bridge::Bridge;
 pub use client::GameClient;
 pub use filter::MessageFilter;
 pub use formatter::{escape_discord_markdown, split_message, FormatContext, MessageFormatter};
-pub use router::{Direction, MessageRouter, Route, SharedRouter, WowChannel};
+pub use router::{Direction, MessageRouter, Route, SharedRouter};

@@ -104,8 +104,8 @@ impl Bridge {
             if is_dot_command {
                 // Send the content directly without formatting
                 results.push(OutgoingWowMessage {
-                    chat_type: route.wow_channel.to_chat_type(),
-                    channel_name: route.wow_channel.channel_name().map(|s| s.to_string()),
+                    chat_type: route.chat_type.to_id(),
+                    channel_name: route.wow_channel_name.clone(),
                     sender: msg.sender.clone(),
                     content: msg.content.clone(),
                 });
@@ -132,7 +132,8 @@ impl Bridge {
                 // Apply filter
                 if self.filter.should_filter_discord_to_wow(&formatted) {
                     info!(
-                        wow_channel = ?route.wow_channel,
+                        chat_type = ?route.chat_type,
+                        channel_name = ?route.wow_channel_name,
                         "FILTERED Discord->WoW: {}",
                         formatted
                     );
@@ -140,14 +141,15 @@ impl Bridge {
                 }
 
                 info!(
-                    wow_channel = ?route.wow_channel,
+                    chat_type = ?route.chat_type,
+                    channel_name = ?route.wow_channel_name,
                     "Discord->WoW: {}",
                     formatted
                 );
 
                 results.push(OutgoingWowMessage {
-                    chat_type: route.wow_channel.to_chat_type(),
-                    channel_name: route.wow_channel.channel_name().map(|s| s.to_string()),
+                    chat_type: route.chat_type.to_id(),
+                    channel_name: route.wow_channel_name.clone(),
                     sender: msg.sender.clone(),
                     content: formatted,
                 });

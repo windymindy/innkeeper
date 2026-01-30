@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 
 use crate::common::{IncomingWowMessage, OutgoingWowMessage};
 use crate::config::types::Config;
-use crate::game::router::WowChannel;
+use crate::game::router::parse_channel_config;
 
 use super::commands::WowCommand;
 use super::handler::{BridgeHandler, BridgeState, ChannelConfig};
@@ -90,14 +90,12 @@ impl DiscordBotBuilder {
         let mut pending_configs: Vec<(String, String, ChannelConfig)> = Vec::new();
 
         for channel in &self.config.chat.channels {
-            let wow_channel = WowChannel::from_channel_config(&channel.wow);
-            let wow_chat_type = wow_channel.to_chat_type();
-            let wow_channel_name = channel.wow.channel.clone();
-            let discord_channel_name = channel.discord.channel.clone();
+            let (chat_type, wow_channel_name) = parse_channel_config(&channel.wow);
+            let wow_chat_type = chat_type.to_id();
 
             let channel_config = ChannelConfig {
                 discord_channel_id: None,
-                discord_channel_name: discord_channel_name.clone(),
+                discord_channel_name: channel.discord.channel.clone(),
                 wow_chat_type,
                 wow_channel_name,
                 format_wow_to_discord: channel
@@ -112,7 +110,7 @@ impl DiscordBotBuilder {
                     .unwrap_or_else(|| "[%user]: %message".to_string()),
             };
 
-            pending_configs.push((discord_channel_name, channel.direction.clone(), channel_config));
+            pending_configs.push((channel.discord.channel.clone(), channel.direction.clone(), channel_config));
         }
 
         info!("Configured {} channel mappings", self.config.chat.channels.len());
