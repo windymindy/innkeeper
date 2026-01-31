@@ -14,9 +14,9 @@ pub mod types;
 pub mod validate;
 
 pub use env::{apply_env_overrides, get_config_path};
-pub use parser::{load_config, load_config_str};
+pub use parser::load_config;
 pub use types::*;
-pub use validate::{has_required_fields, validate_config};
+pub use validate::validate_config;
 
 use crate::common::error::ConfigError;
 

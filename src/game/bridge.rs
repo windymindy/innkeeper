@@ -1,33 +1,24 @@
 //! Bridge orchestrator that ties WoW and Discord together.
 //!
-//! Manages the bidirectional message flow, filtering, formatting, and routing.
+//! Manages the bidirectional message flow, formatting, and routing.
+//! Filtering is now handled per-route in the MessageRouter.
 
 use std::sync::Arc;
 
-use serenity::all::Http;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 
 use crate::config::types::Config;
 use crate::discord::resolver::MessageResolver;
-use crate::game::filter::MessageFilter;
-use crate::game::formatter::{
-    escape_discord_markdown, split_message, FormatContext, MessageFormatter,
-};
+use crate::game::formatter::{split_message, FormatContext, MessageFormatter};
 use crate::game::router::{MessageRouter, SharedRouter};
 
 // Re-export types from common for backwards compatibility
-pub use crate::common::{
-    BridgeChannels, BridgeCommand, DiscordMessage, IncomingWowMessage, OutgoingWowMessage,
-    WowMessage,
-};
-pub use crate::discord::commands::CommandResponse;
+pub use crate::common::{DiscordMessage, OutgoingWowMessage};
 
 /// The main bridge that orchestrates message flow.
 pub struct Bridge {
     /// Message router.
     router: SharedRouter,
-    /// Message filter.
-    filter: Arc<MessageFilter>,
     /// Message resolver for Discord transformations.
     resolver: Arc<MessageResolver>,
     /// Whether dot commands are enabled.
@@ -43,25 +34,10 @@ impl Bridge {
             Arc::new(MessageRouter::from_config(&config.chat))
         };
 
-        let filter = if let Some(ref filters) = config.filters {
-            let enabled = filters.enabled;
-            if enabled {
-                Arc::new(MessageFilter::new(
-                    filters.patterns.clone(),
-                    filters.patterns.clone(),
-                ))
-            } else {
-                Arc::new(MessageFilter::empty())
-            }
-        } else {
-            Arc::new(MessageFilter::empty())
-        };
-
         let enable_dot_commands = config.discord.enable_dot_commands;
 
         Self {
             router,
-            filter,
             resolver: Arc::new(MessageResolver::new()),
             enable_dot_commands,
         }
@@ -129,8 +105,8 @@ impl Bridge {
                 let ctx = FormatContext::new(&msg.sender, &chunk);
                 let formatted = formatter.format(&ctx);
 
-                // Apply filter
-                if self.filter.should_filter_discord_to_wow(&formatted) {
+                // Apply per-route filter
+                if route.filter.should_filter_discord_to_wow(&formatted) {
                     info!(
                         chat_type = ?route.chat_type,
                         channel_name = ?route.wow_channel_name,
@@ -202,10 +178,12 @@ mod tests {
                         channel_type: "Guild".to_string(),
                         channel: None,
                         format: Some("[%user]: %message".to_string()),
+                        filters: None,
                     },
                     discord: DiscordChannelConfig {
                         channel: "guild-chat".to_string(),
                         format: Some("[%user]: %message".to_string()),
+                        filters: None,
                     },
                 }],
             },

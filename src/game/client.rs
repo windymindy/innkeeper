@@ -1,7 +1,7 @@
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::common::{BridgeChannels, BridgeCommand, WowMessage};
 use crate::config::types::Config;

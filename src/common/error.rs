@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Top-level application error.
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum AppError {
     #[error("Configuration error: {0}")]
     Config(#[from] ConfigError),
@@ -29,15 +30,18 @@ pub enum ConfigError {
     },
 
     #[error("Failed to parse config: {message}")]
+    #[allow(dead_code)]
     ParseError { message: String },
 
     #[error("Config validation failed: {message}")]
     ValidationError { message: String },
 
     #[error("Missing required field: {field}")]
+    #[allow(dead_code)]
     MissingField { field: String },
 
     #[error("Invalid value for '{field}': {message}")]
+    #[allow(dead_code)]
     InvalidValue { field: String, message: String },
 }
 
@@ -60,15 +64,18 @@ pub enum ProtocolError {
     AuthFailed { reason: String },
 
     #[error("Character not found: {name}")]
+    #[allow(dead_code)]
     CharacterNotFound { name: String },
 
     #[error("Realm not found: {name}")]
+    #[allow(dead_code)]
     RealmNotFound { name: String },
 
     #[error("Encryption error: {message}")]
     EncryptionError { message: String },
 
     #[error("Decryption error: {message}")]
+    #[allow(dead_code)]
     DecryptionError { message: String },
 
     #[error("IO error: {0}")]
@@ -90,17 +97,20 @@ pub enum ConnectionError {
     ConnectionClosed,
 
     #[error("Connection timeout")]
+    #[allow(dead_code)]
     Timeout,
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("Maximum reconnection attempts exceeded")]
+    #[allow(dead_code)]
     MaxReconnectAttempts,
 }
 
 /// Discord-related errors.
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum DiscordError {
     #[error("Failed to connect to Discord: {message}")]
     ConnectionFailed { message: String },
@@ -122,13 +132,17 @@ pub enum DiscordError {
 }
 
 /// Result type alias using AppError.
+#[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, AppError>;
 
 /// Result type alias for protocol operations.
+#[allow(dead_code)]
 pub type ProtocolResult<T> = std::result::Result<T, ProtocolError>;
 
 /// Result type alias for connection operations.
+#[allow(dead_code)]
 pub type ConnectionResult<T> = std::result::Result<T, ConnectionError>;
 
 /// Result type alias for Discord operations.
+#[allow(dead_code)]
 pub type DiscordResult<T> = std::result::Result<T, DiscordError>;

@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 use crate::common::error::ProtocolError;
 use crate::common::types::{ChatMessage, GuildInfo, GuildMember, Player};
 use crate::protocol::game::chat::{
-    chat_events, get_language_for_race, ChannelNotify, JoinChannelWotLK, MessageChat, NameQuery,
+    get_language_for_race, ChannelNotify, JoinChannelWotLK, MessageChat, NameQuery,
     NameQueryResponse, SendChatMessage,
 };
 use crate::protocol::game::guild::{

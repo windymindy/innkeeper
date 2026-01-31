@@ -7,7 +7,7 @@ use regex::Regex;
 use tracing::warn;
 
 /// Message filter that checks messages against regex patterns.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageFilter {
     /// Compiled patterns for WoW -> Discord filtering.
     wow_to_discord_patterns: Vec<CompiledPattern>,
@@ -16,7 +16,7 @@ pub struct MessageFilter {
 }
 
 /// A compiled regex pattern with its original string for debugging.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CompiledPattern {
     original: String,
     regex: Regex,

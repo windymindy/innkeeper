@@ -402,6 +402,9 @@ pub struct WowChannelConfig {
     /// Format string for messages from WoW
     #[serde(default, deserialize_with = "option_string")]
     pub format: Option<String>,
+    /// Per-channel filter configuration for WoW -> Discord messages
+    #[serde(default, deserialize_with = "option_struct")]
+    pub filters: Option<FiltersConfig>,
 }
 
 /// Discord channel configuration.
@@ -412,6 +415,9 @@ pub struct DiscordChannelConfig {
     /// Format string for messages from Discord
     #[serde(default, deserialize_with = "option_string")]
     pub format: Option<String>,
+    /// Per-channel filter configuration for Discord -> WoW and WoW -> Discord messages
+    #[serde(default, deserialize_with = "option_struct")]
+    pub filters: Option<FiltersConfig>,
 }
 
 /// Message filtering configuration.

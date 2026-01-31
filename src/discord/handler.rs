@@ -61,7 +61,6 @@ impl BridgeState {
     /// Resolve Discord channel IDs from channel names after bot connects.
     /// Returns the number of channels successfully resolved.
     pub fn resolve_discord_channels(&mut self, guild_channels: &[GuildChannel]) -> usize {
-        let mut resolved_count = 0;
         let mut unresolved = Vec::new();
         let mut resolved_channels: HashSet<ChannelId> = HashSet::new();
 
@@ -95,8 +94,6 @@ impl BridgeState {
                 } else {
                     debug!("Added additional mapping to '{}' for WoW channel {:?}", channel_name, config.wow_channel_name);
                 }
-                
-                resolved_count += 1;
             } else {
                 warn!("Could not resolve Discord channel: {}", channel_name);
                 // Save for retry later

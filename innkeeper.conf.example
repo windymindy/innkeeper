@@ -98,6 +98,11 @@ guild {
 # }
 
 # Chat to redirect
+# Note: Per-channel filters can be configured in addition to global filters!
+# Priority order (first non-disabled filter wins):
+# 1. Discord channel filters (highest priority, applies to BOTH directions)
+# 2. WoW channel filters (applies to WoW -> Discord only)
+# 3. Global filters (lowest priority, applies to all channels)
 chat {
   channels=[
     {
@@ -159,10 +164,25 @@ chat {
       direction=wow_to_discord
       wow {
         type=System
+        # Example: Per-channel filter on WoW side
+        # filters {
+        #   enabled=true
+        #   patterns=[
+        #     "Error 1:.*"
+        #     "Welcome to.*"
+        #   ]
+        # }
       }
       discord {
         channel=guild-chat
         format="[SYSTEM]: %message"
+        # Example: Per-channel filter on Discord side (highest priority)
+        # filters {
+        #   enabled=true
+        #   patterns=[
+        #     "(?i).*(spam|gold).*"  # Case insensitive
+        #   ]
+        # }
       }
     }
 
@@ -185,10 +205,19 @@ chat {
         type=Channel
         channel="Trade - City"
         format="[%user]: %message"
+        # Example: Filter WoW -> Discord messages only
+        filters {
+          enabled=true
+          patterns=[
+            # Filter gold selling spam (case insensitive)
+            "(?i).*((buy|sell|wts|wtb).*gold).*"
+          ]
+        }
       }
       discord {
         channel=trade-chat
         format="[%target] [%user]: %message"
+        # No Discord-side filter, so WoW-side filter applies to WoW->Discord only
       }
     }
   ]

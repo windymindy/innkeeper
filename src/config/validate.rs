@@ -166,10 +166,12 @@ mod tests {
                         channel_type: "Guild".to_string(),
                         channel: None,
                         format: Some("[%user]: %message".to_string()),
+                        filters: None,
                     },
                     discord: DiscordChannelConfig {
                         channel: "guild-chat".to_string(),
                         format: Some("[%user]: %message".to_string()),
+                        filters: None,
                     },
                 }],
             },
