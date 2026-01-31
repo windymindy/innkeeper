@@ -18,12 +18,12 @@ pub use parser::load_config;
 pub use types::*;
 pub use validate::validate_config;
 
-use crate::common::error::ConfigError;
+use anyhow::Result;
 
 /// Load, apply environment overrides, and validate configuration.
 ///
 /// This is the main entry point for loading configuration.
-pub fn load_and_validate(path: impl AsRef<std::path::Path>) -> Result<Config, ConfigError> {
+pub fn load_and_validate(path: impl AsRef<std::path::Path>) -> Result<Config> {
     // Load from file (HOCON parser handles ${?VAR} env var substitution automatically)
     let config = load_config(path)?;
 
@@ -40,6 +40,6 @@ pub fn load_and_validate(path: impl AsRef<std::path::Path>) -> Result<Config, Co
 ///
 /// Uses `WOWCHAT_CONFIG`, `INNKEEPER_CONFIG` environment variable,
 /// or "innkeeper.conf" as default.
-pub fn load_default() -> Result<Config, ConfigError> {
+pub fn load_default() -> Result<Config> {
     load_and_validate(get_config_path())
 }

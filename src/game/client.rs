@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -34,12 +35,12 @@ impl GameClient {
         }
     }
 
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&mut self) -> Result<()> {
         let (host, port) = self
             .session
             .realm
             .parse_address()
-            .ok_or("Invalid realm address")?;
+            .ok_or_else(|| anyhow!("Invalid realm address"))?;
         info!("Connecting to game server at {}:{}", host, port);
         let stream = TcpStream::connect((host, port)).await?;
         self.handle_connection(stream).await
@@ -48,7 +49,7 @@ impl GameClient {
     pub async fn handle_connection<S>(
         &mut self,
         stream: S,
-    ) -> Result<(), Box<dyn std::error::Error>>
+    ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -84,7 +85,7 @@ impl GameClient {
                                         let char_enum_req = handler.build_char_enum_request();
                                         connection.send(char_enum_req.into()).await?;
                                     } else {
-                                        return Err("Game auth failed".into());
+                                        return Err(anyhow!("Game auth failed"));
                                     }
                                 }
                                 SMSG_CHAR_ENUM => {
@@ -94,7 +95,7 @@ impl GameClient {
                                         connection.send(login.into()).await?;
                                         info!("Sent player login for {}", char_info.name);
                                     } else {
-                                        return Err(format!("Character '{}' not found", self.config.wow.character).into());
+                                        return Err(anyhow!("Character '{}' not found", self.config.wow.character));
                                     }
                                 }
                                 SMSG_LOGIN_VERIFY_WORLD => {
@@ -286,7 +287,7 @@ impl GameClient {
                     if handler.in_world {
                         let ping = handler.build_ping(0); // sequence doesn't matter for keepalive
                         if let Err(e) = connection.send(ping.into()).await {
-                            return Err(format!("Failed to send ping: {}", e).into());
+                            return Err(anyhow!("Failed to send ping: {}", e));
                         }
                     }
                 }

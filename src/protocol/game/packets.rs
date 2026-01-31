@@ -1,7 +1,7 @@
 //! Game server packet definitions.
 
-use crate::common::error::ProtocolError;
 use crate::protocol::packets::{PacketDecode, PacketEncode};
+use anyhow::{anyhow, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 // Addon info blob (Ascension specific)
@@ -14,14 +14,15 @@ pub struct AuthChallenge {
 }
 
 impl PacketDecode for AuthChallenge {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 8 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 8,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                8,
+                buf.remaining()
+            ));
         }
         // Skip 4 bytes (1 byte type + 3 bytes padding?)
         // Scala code says: msg.byteBuf.skipBytes(4) // Skip WotLK-specific padding/nulls
@@ -112,14 +113,15 @@ pub enum AuthResponse {
 }
 
 impl PacketDecode for AuthResponse {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 1 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 1,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                1,
+                buf.remaining()
+            ));
         }
 
         let result = buf.get_u8();
@@ -181,14 +183,15 @@ pub struct CharEnum {
 }
 
 impl PacketDecode for CharEnum {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 1 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 1,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                1,
+                buf.remaining()
+            ));
         }
 
         let count = buf.get_u8();
@@ -258,7 +261,7 @@ impl PacketDecode for CharEnum {
     }
 }
 
-fn read_cstring(buf: &mut Bytes) -> Result<String, ProtocolError> {
+fn read_cstring(buf: &mut Bytes) -> Result<String> {
     let mut bytes = Vec::new();
     while buf.remaining() > 0 {
         let b = buf.get_u8();
@@ -305,14 +308,15 @@ pub struct LoginVerifyWorld {
 }
 
 impl PacketDecode for LoginVerifyWorld {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 20 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 20,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                20,
+                buf.remaining()
+            ));
         }
         Ok(LoginVerifyWorld {
             map_id: buf.get_u32_le(),
@@ -357,14 +361,15 @@ pub struct Pong {
 }
 
 impl PacketDecode for Pong {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
         Ok(Pong {
             sequence: buf.get_u32_le(),

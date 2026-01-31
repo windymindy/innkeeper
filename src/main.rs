@@ -11,6 +11,7 @@ mod protocol;
 
 use std::sync::Arc;
 
+use anyhow::Result;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -24,7 +25,7 @@ use game::GameClient;
 use protocol::realm::connector::connect_and_authenticate;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -39,15 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = get_config_path();
     info!("Loading configuration from {}...", config_path);
 
-    let config = match load_and_validate(&config_path) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            error!("Failed to load configuration: {}", e);
-            error!("Please ensure {} exists and is properly formatted.", config_path);
-            error!("See the example configuration for reference.");
-            return Err(e.into());
-        }
-    };
+    let config = load_and_validate(&config_path).map_err(|e| {
+        error!("Failed to load configuration: {}", e);
+        error!("Please ensure {} exists and is properly formatted.", config_path);
+        error!("See the example configuration for reference.");
+        e
+    })?;
 
     info!("Configuration loaded successfully");
     info!("  WoW Account: {}", config.wow.account);

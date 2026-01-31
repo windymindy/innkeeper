@@ -4,9 +4,9 @@ use bytes::{Buf, BufMut, BytesMut};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
-use crate::common::error::ProtocolError;
 use crate::protocol::game::header::GameHeaderCrypt;
 use crate::protocol::packets::Packet;
+use anyhow::Error;
 
 /// Codec for WoW game server packets.
 pub struct GamePacketCodec {
@@ -26,7 +26,7 @@ impl GamePacketCodec {
 
 impl Decoder for GamePacketCodec {
     type Item = Packet;
-    type Error = ProtocolError;
+    type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         if src.is_empty() {
@@ -74,7 +74,7 @@ impl Decoder for GamePacketCodec {
 }
 
 impl Encoder<Packet> for GamePacketCodec {
-    type Error = ProtocolError;
+    type Error = Error;
 
     fn encode(&mut self, item: Packet, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let payload_len = item.payload.len();

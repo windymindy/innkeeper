@@ -4,9 +4,9 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use crate::common::error::ProtocolError;
 use crate::common::types::{ChatMessage, ChatType, Guid};
 use crate::protocol::packets::{PacketDecode, PacketEncode};
+use anyhow::{anyhow, Result};
 
 /// Chat events (message types) from WoW protocol.
 #[allow(dead_code)]
@@ -142,7 +142,7 @@ impl MessageChat {
 }
 
 impl PacketDecode for MessageChat {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         Self::decode_(buf, false)
@@ -150,12 +150,13 @@ impl PacketDecode for MessageChat {
 }
 
 impl MessageChat {
-    pub fn decode_(buf: &mut Bytes, is_gm: bool) -> Result<Self, ProtocolError> {
+    pub fn decode_(buf: &mut Bytes, is_gm: bool) -> Result<Self> {
         if buf.remaining() < 13 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 13,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                13,
+                buf.remaining()
+            ));
         }
 
         let chat_type = buf.get_u8();
@@ -163,9 +164,7 @@ impl MessageChat {
 
         // Addon messages have language -1, skip them
         if language == languages::LANG_ADDON {
-            return Err(ProtocolError::InvalidPacket {
-                message: "Addon message".to_string(),
-            });
+            return Err(anyhow!("Invalid packet: Addon message"));
         }
 
         // Read sender GUID (8 bytes)
@@ -199,10 +198,11 @@ impl MessageChat {
 
         // Message length (includes null terminator)
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
         let message_length = buf.get_u32_le();
 
@@ -214,10 +214,11 @@ impl MessageChat {
         };
 
         if buf.remaining() < msg_len {
-            return Err(ProtocolError::PacketTooShort {
-                needed: msg_len,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                msg_len,
+                buf.remaining()
+            ));
         }
 
         let message_bytes = buf.copy_to_bytes(msg_len);
@@ -389,14 +390,15 @@ impl ChannelNotify {
 }
 
 impl PacketDecode for ChannelNotify {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 2 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 2,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                2,
+                buf.remaining()
+            ));
         }
 
         let notify_type = buf.get_u8();
@@ -445,7 +447,7 @@ pub struct NameQueryResponse {
 }
 
 impl PacketDecode for NameQueryResponse {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         // WotLK uses packed GUID (variable length, 1-9 bytes)
@@ -453,10 +455,11 @@ impl PacketDecode for NameQueryResponse {
 
         // WotLK has a nameKnown byte before the name
         if buf.remaining() < 1 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 1,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                1,
+                buf.remaining()
+            ));
         }
         let name_known = buf.get_u8();
 
@@ -467,10 +470,11 @@ impl PacketDecode for NameQueryResponse {
 
             // WotLK sends 1-byte values for race, gender, class (not 4-byte!)
             if buf.remaining() < 3 {
-                return Err(ProtocolError::PacketTooShort {
-                    needed: 3,
-                    got: buf.remaining(),
-                });
+                return Err(anyhow!(
+                    "Packet too short: need {} bytes, got {}",
+                    3,
+                    buf.remaining()
+                ));
             }
 
             let race = buf.get_u8() as u32;
@@ -495,7 +499,7 @@ impl PacketDecode for NameQueryResponse {
 }
 
 /// Helper function to read a null-terminated C string from the buffer.
-fn read_cstring(buf: &mut Bytes) -> Result<String, ProtocolError> {
+fn read_cstring(buf: &mut Bytes) -> Result<String> {
     let mut bytes = Vec::new();
     while buf.remaining() > 0 {
         let b = buf.get_u8();
@@ -509,12 +513,13 @@ fn read_cstring(buf: &mut Bytes) -> Result<String, ProtocolError> {
 
 /// Helper function to read a packed GUID (variable length, 1-9 bytes).
 /// WoW uses packed GUIDs to save bandwidth - only non-zero bytes of the GUID are sent.
-fn read_packed_guid(buf: &mut Bytes) -> Result<u64, ProtocolError> {
+fn read_packed_guid(buf: &mut Bytes) -> Result<u64> {
     if buf.remaining() < 1 {
-        return Err(ProtocolError::PacketTooShort {
-            needed: 1,
-            got: buf.remaining(),
-        });
+        return Err(anyhow!(
+            "Packet too short: need {} bytes, got {}",
+            1,
+            buf.remaining()
+        ));
     }
 
     let set = buf.get_u8();
@@ -524,10 +529,11 @@ fn read_packed_guid(buf: &mut Bytes) -> Result<u64, ProtocolError> {
         let on_bit = 1 << i;
         if (set & on_bit) == on_bit {
             if buf.remaining() < 1 {
-                return Err(ProtocolError::PacketTooShort {
-                    needed: 1,
-                    got: buf.remaining(),
-                });
+                return Err(anyhow!(
+                    "Packet too short: need {} bytes, got {}",
+                    1,
+                    buf.remaining()
+                ));
             }
             let byte_val = buf.get_u8() as u64;
             result |= byte_val << (i * 8);
@@ -568,7 +574,7 @@ pub struct ServerNotification {
 }
 
 impl PacketDecode for ServerNotification {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         let message = read_cstring(buf)?;
@@ -590,14 +596,15 @@ impl ServerMotd {
 }
 
 impl PacketDecode for ServerMotd {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
 
         let line_count = buf.get_u32_le() as usize;
@@ -654,14 +661,15 @@ impl ServerMessage {
 }
 
 impl PacketDecode for ServerMessage {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
 
         let message_type = buf.get_u32_le();

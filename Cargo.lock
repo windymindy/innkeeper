@@ -37,6 +37,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.100"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -779,6 +785,7 @@ dependencies = [
 name = "innkeeper"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "chacha20poly1305",
  "chrono",
@@ -794,7 +801,6 @@ dependencies = [
  "serenity",
  "sha1",
  "sha2",
- "thiserror 2.0.18",
  "tokio",
  "tokio-test",
  "tokio-util",

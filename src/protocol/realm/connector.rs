@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
-use crate::common::error::{ConnectionError, ProtocolError};
+use anyhow::{anyhow, Context, Result};
 use crate::protocol::realm::handler::RealmHandler;
 use crate::protocol::realm::packets::RealmInfo;
 
@@ -26,23 +26,16 @@ pub async fn connect_and_authenticate(
     account: &str,
     password: &str,
     realm_name: &str,
-) -> Result<RealmSession, ConnectionError> {
+) -> Result<RealmSession> {
     let addr = format!("{}:{}", host, port);
     info!("Connecting to realm server at {}", addr);
 
-    let socket_addr: SocketAddr = addr.parse().map_err(|e| ConnectionError::ConnectFailed {
-        host: host.to_string(),
-        port,
-        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, e),
-    })?;
+    let socket_addr: SocketAddr = addr.parse()
+        .with_context(|| format!("Invalid address: {}", addr))?;
 
     let mut stream = TcpStream::connect(socket_addr)
         .await
-        .map_err(|e| ConnectionError::ConnectFailed {
-            host: host.to_string(),
-            port,
-            source: e,
-        })?;
+        .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
 
     info!("Connected to realm server");
 
@@ -53,9 +46,8 @@ pub async fn connect_and_authenticate(
     let mut read_buf = BytesMut::with_capacity(4096);
 
     // Step 1: Send AUTH_LOGON_CHALLENGE
-    let challenge_packet = handler.build_logon_challenge().map_err(|e| {
-        ConnectionError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-    })?;
+    let challenge_packet = handler.build_logon_challenge()
+        .with_context(|| "Failed to build logon challenge")?;
 
     debug!("Sending AUTH_LOGON_CHALLENGE ({} bytes)", challenge_packet.len());
     stream.write_all(&challenge_packet).await?;
@@ -65,14 +57,13 @@ pub async fn connect_and_authenticate(
     let mut temp_buf = [0u8; 256];
     let n = stream.read(&mut temp_buf).await?;
     if n == 0 {
-        return Err(ConnectionError::ConnectionClosed);
+        return Err(anyhow!("Connection closed by remote"));
     }
     read_buf.extend_from_slice(&temp_buf[..n]);
 
     debug!("Received {} bytes for challenge response", n);
-    handler.handle_logon_challenge_response(&read_buf).map_err(|e| {
-        ConnectionError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-    })?;
+    handler.handle_logon_challenge_response(&read_buf)
+        .map_err(|e| anyhow!("Challenge response failed: {}", e))?;
 
     // Step 3: Send AUTH_LOGON_PROOF
     let proof_packet = handler.build_logon_proof();
@@ -83,14 +74,13 @@ pub async fn connect_and_authenticate(
     read_buf.clear();
     let n = stream.read(&mut temp_buf).await?;
     if n == 0 {
-        return Err(ConnectionError::ConnectionClosed);
+        return Err(anyhow!("Connection closed by remote"));
     }
     read_buf.extend_from_slice(&temp_buf[..n]);
 
     debug!("Received {} bytes for proof response", n);
-    handler.handle_logon_proof_response(&read_buf).map_err(|e| {
-        ConnectionError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-    })?;
+    handler.handle_logon_proof_response(&read_buf)
+        .map_err(|e| anyhow!("Proof response failed: {}", e))?;
 
     info!("Authentication successful");
 
@@ -118,9 +108,8 @@ pub async fn connect_and_authenticate(
     }
 
     debug!("Received {} bytes for realm list", read_buf.len());
-    let realms = handler.handle_realm_list_response(&read_buf).map_err(|e| {
-        ConnectionError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-    })?;
+    let realms = handler.handle_realm_list_response(&read_buf)
+        .with_context(|| "Failed to parse realm list")?;
 
     // Find the requested realm
     let realm = realms
@@ -128,10 +117,7 @@ pub async fn connect_and_authenticate(
         .find(|r| r.name.eq_ignore_ascii_case(realm_name))
         .ok_or_else(|| {
             warn!("Realm '{}' not found", realm_name);
-            ConnectionError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Realm '{}' not found", realm_name),
-            ))
+            anyhow!("Realm '{}' not found", realm_name)
         })?;
 
     info!("Selected realm: {} at {}", realm.name, realm.address);

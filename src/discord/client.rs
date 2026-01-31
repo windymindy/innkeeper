@@ -50,7 +50,7 @@ impl ClientConfig {
         &self,
         wow_rx: mpsc::UnboundedReceiver<IncomingWowMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
-    ) -> Result<Client, serenity::Error> {
+    ) -> anyhow::Result<Client> {
         let handler = BridgeHandler::new(wow_rx, command_tx);
 
         let client = Client::builder(&self.token, self.intents)
@@ -85,7 +85,7 @@ impl DiscordBotBuilder {
     }
 
     /// Build the Discord bot.
-    pub async fn build(self) -> Result<DiscordBot, serenity::Error> {
+    pub async fn build(self) -> anyhow::Result<DiscordBot> {
         // Build channel mappings from config
         let mut pending_configs: Vec<(String, String, ChannelConfig)> = Vec::new();
 
@@ -280,8 +280,9 @@ pub async fn send_command_response(
     http: &Http,
     channel_id: u64,
     content: &str,
-) -> Result<(), serenity::Error> {
+) -> anyhow::Result<()> {
     use serenity::model::id::ChannelId;
     let channel = ChannelId::new(channel_id);
-    channel.say(http, content).await.map(|_| ())
+    channel.say(http, content).await.map(|_| ())?;
+    Ok(())
 }

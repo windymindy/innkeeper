@@ -10,8 +10,8 @@ use sha2::Sha256;
 use tracing::{debug, trace};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::common::error::ProtocolError;
 use crate::protocol::realm::packets::{AuthResult, RealmInfo};
+use anyhow::{anyhow, Context, Result};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -158,22 +158,16 @@ impl RealmHandler {
     }
 
     /// Build the AUTH_LOGON_CHALLENGE packet.
-    pub fn build_logon_challenge(&self) -> Result<Vec<u8>, ProtocolError> {
+    pub fn build_logon_challenge(&self) -> Result<Vec<u8>> {
         // Encrypt password
         let password_bytes = self.password.as_bytes();
-        let cipher = ChaCha20Poly1305::new_from_slice(&self.key_derived).map_err(|e| {
-            ProtocolError::EncryptionError {
-                message: e.to_string(),
-            }
-        })?;
+        let cipher = ChaCha20Poly1305::new_from_slice(&self.key_derived)
+            .map_err(|e| anyhow!("Failed to initialize encryption: {}", e))?;
 
         let nonce = Nonce::from_slice(&self.nonce);
-        let encrypted_password =
-            cipher
-                .encrypt(nonce, password_bytes)
-                .map_err(|e| ProtocolError::EncryptionError {
-                    message: e.to_string(),
-                })?;
+        let encrypted_password = cipher
+            .encrypt(nonce, password_bytes)
+            .map_err(|e| anyhow!("Failed to encrypt password: {}", e))?;
 
         // Split into ciphertext and tag
         let password_len = password_bytes.len();
@@ -252,11 +246,8 @@ impl RealmHandler {
         let data_to_encrypt = &data_1[..data_1.len() - 4];
         let tail = &data_1[data_1.len() - 4..];
 
-        let cipher2 = ChaCha20Poly1305::new_from_slice(&KEY_CONSTANT_2).map_err(|e| {
-            ProtocolError::EncryptionError {
-                message: e.to_string(),
-            }
-        })?;
+        let cipher2 = ChaCha20Poly1305::new_from_slice(&KEY_CONSTANT_2)
+            .map_err(|e| anyhow!("Failed to initialize cipher: {}", e))?;
 
         let nonce2 = Nonce::from_slice(&NONCE_CONSTANT_2);
         let payload = Payload {
@@ -264,12 +255,9 @@ impl RealmHandler {
             aad: &header[..],
         };
 
-        let encrypted =
-            cipher2
-                .encrypt(nonce2, payload)
-                .map_err(|e| ProtocolError::EncryptionError {
-                    message: e.to_string(),
-                })?;
+        let encrypted = cipher2
+            .encrypt(nonce2, payload)
+            .map_err(|e| anyhow!("Failed to encrypt data: {}", e))?;
 
         // Split encrypted data and tag
         let encrypted_data = &encrypted[..encrypted.len() - 16];
@@ -290,20 +278,21 @@ impl RealmHandler {
     }
 
     /// Handle AUTH_LOGON_CHALLENGE response from server.
-    pub fn handle_logon_challenge_response(&self, data: &[u8]) -> Result<(), ProtocolError> {
+    pub fn handle_logon_challenge_response(&self, data: &[u8]) -> Result<()> {
         if data.len() < 3 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 3,
-                got: data.len(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                3,
+                data.len()
+            ));
         }
 
         let opcode = data[0];
         if opcode != 0x00 {
-            return Err(ProtocolError::UnexpectedOpcode {
-                expected: 0x00,
-                actual: opcode as u16,
-            });
+            return Err(anyhow!(
+                "Unexpected opcode: expected 0x00, got 0x{:02X}",
+                opcode
+            ));
         }
 
         // data[1] is error code (ignored)
@@ -311,9 +300,7 @@ impl RealmHandler {
         let auth_result = AuthResult::from_code(result);
 
         if auth_result != AuthResult::Success {
-            return Err(ProtocolError::AuthFailed {
-                reason: format!("{:?}", auth_result),
-            });
+            return Err(anyhow!("Authentication failed: {:?}", auth_result));
         }
 
         // Check security flag (should be 0, otherwise 2FA required)
@@ -321,9 +308,7 @@ impl RealmHandler {
         if data.len() >= 118 {
             let security_flag = data[data.len() - 1];
             if security_flag != 0 {
-                return Err(ProtocolError::AuthFailed {
-                    reason: "Two-factor authentication required".to_string(),
-                });
+                return Err(anyhow!("Two-factor authentication required"));
             }
         }
 
@@ -344,38 +329,35 @@ impl RealmHandler {
     }
 
     /// Handle AUTH_LOGON_PROOF response from server.
-    pub fn handle_logon_proof_response(&self, data: &[u8]) -> Result<(), ProtocolError> {
+    pub fn handle_logon_proof_response(&self, data: &[u8]) -> Result<()> {
         if data.len() < 2 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 2,
-                got: data.len(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                2,
+                data.len()
+            ));
         }
 
         let opcode = data[0];
         if opcode != 0x01 {
-            return Err(ProtocolError::UnexpectedOpcode {
-                expected: 0x01,
-                actual: opcode as u16,
-            });
+            return Err(anyhow!(
+                "Unexpected opcode: expected 0x01, got 0x{:02X}",
+                opcode
+            ));
         }
 
         let result = data[1];
         let auth_result = AuthResult::from_code(result);
 
         if auth_result != AuthResult::Success {
-            return Err(ProtocolError::AuthFailed {
-                reason: format!("{:?}", auth_result),
-            });
+            return Err(anyhow!("Authentication failed: {:?}", auth_result));
         }
 
         // Verify server proof
         if data.len() >= 34 {
             let server_proof: [u8; 32] = data[2..34].try_into().unwrap();
             if server_proof != self.proof_2 {
-                return Err(ProtocolError::AuthFailed {
-                    reason: "Server proof mismatch".to_string(),
-                });
+                return Err(anyhow!("Server proof mismatch"));
             }
             debug!("Server proof verified");
         }
@@ -393,22 +375,23 @@ impl RealmHandler {
     }
 
     /// Handle REALM_LIST response and extract realm info.
-    pub fn handle_realm_list_response(&self, data: &[u8]) -> Result<Vec<RealmInfo>, ProtocolError> {
+    pub fn handle_realm_list_response(&self, data: &[u8]) -> Result<Vec<RealmInfo>> {
         if data.len() < 7 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 7,
-                got: data.len(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                7,
+                data.len()
+            ));
         }
 
         let mut buf = &data[..];
 
         let opcode = buf.get_u8();
         if opcode != 0x10 {
-            return Err(ProtocolError::UnexpectedOpcode {
-                expected: 0x10,
-                actual: opcode as u16,
-            });
+            return Err(anyhow!(
+                "Unexpected opcode: expected 0x10, got 0x{:02X}",
+                opcode
+            ));
         }
 
         let _size = buf.get_u16_le();
@@ -470,13 +453,11 @@ impl RealmHandler {
     }
 
     /// Read a null-terminated string from buffer.
-    fn read_cstring(buf: &mut &[u8]) -> Result<String, ProtocolError> {
+    fn read_cstring(buf: &mut &[u8]) -> Result<String> {
         let mut bytes = Vec::new();
         loop {
             if buf.is_empty() {
-                return Err(ProtocolError::InvalidString {
-                    message: "Unterminated string".to_string(),
-                });
+                return Err(anyhow!("Unterminated string"));
             }
             let b = buf.get_u8();
             if b == 0 {

@@ -2,11 +2,11 @@
 //!
 //! Validates configuration values and provides helpful error messages.
 
-use crate::common::error::ConfigError;
 use crate::config::types::Config;
+use anyhow::{anyhow, Result};
 
 /// Validate a configuration and return detailed errors.
-pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
+pub fn validate_config(config: &Config) -> Result<()> {
     let mut errors = Vec::new();
 
     // Validate Discord config
@@ -115,9 +115,10 @@ pub fn validate_config(config: &Config) -> Result<(), ConfigError> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(ConfigError::ValidationError {
-            message: errors.join("\n"),
-        })
+        Err(anyhow!(
+            "Configuration validation failed:\n{}",
+            errors.join("\n")
+        ))
     }
 }
 

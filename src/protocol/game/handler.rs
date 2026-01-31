@@ -6,7 +6,6 @@ use bytes::Bytes;
 use sha1::{Digest, Sha1};
 use tracing::{debug, error, info, warn};
 
-use crate::common::error::ProtocolError;
 use crate::common::types::{ChatMessage, GuildInfo, GuildMember, Player};
 use crate::protocol::game::chat::{
     get_language_for_race, ChannelNotify, JoinChannelWotLK, MessageChat, NameQuery,
@@ -20,6 +19,7 @@ use crate::protocol::game::packets::{
     LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 use crate::protocol::packets::PacketDecode;
+use anyhow::{anyhow, Result};
 
 /// Game protocol handler state.
 pub struct GameHandler {
@@ -65,10 +65,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_AUTH_CHALLENGE and build CMSG_AUTH_SESSION.
-    pub fn handle_auth_challenge(
-        &self,
-        packet: AuthChallenge,
-    ) -> Result<AuthSession, ProtocolError> {
+    pub fn handle_auth_challenge(&self, packet: AuthChallenge) -> Result<AuthSession> {
         let client_seed: u32 = rand::random();
         let server_seed = packet.server_seed;
 
@@ -99,7 +96,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_AUTH_RESPONSE.
-    pub fn handle_auth_response(&self, packet: AuthResponse) -> Result<bool, ProtocolError> {
+    pub fn handle_auth_response(&self, packet: AuthResponse) -> Result<bool> {
         match packet {
             AuthResponse::Success { .. } => {
                 debug!("Game auth successful!");
@@ -146,10 +143,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_LOGIN_VERIFY_WORLD.
-    pub fn handle_login_verify_world(
-        &mut self,
-        packet: LoginVerifyWorld,
-    ) -> Result<(), ProtocolError> {
+    pub fn handle_login_verify_world(&mut self, packet: LoginVerifyWorld) -> Result<()> {
         info!(
             "World login verified! Map: {}, X: {}, Y: {}, Z: {}",
             packet.map_id, packet.x, packet.y, packet.z
@@ -181,13 +175,10 @@ impl GameHandler {
     // =========================================================================
 
     /// Handle SMSG_MESSAGECHAT packet.
-    pub fn handle_messagechat(
-        &mut self,
-        mut payload: Bytes,
-    ) -> Result<Option<ChatMessage>, ProtocolError> {
+    pub fn handle_messagechat(&mut self, mut payload: Bytes) -> Result<Option<ChatMessage>> {
         let msg = match MessageChat::decode(&mut payload) {
             Ok(msg) => msg,
-            Err(ProtocolError::InvalidPacket { message }) if message == "Addon message" => {
+            Err(e) if e.to_string().contains("Addon message") => {
                 // Addon messages are internal addon communication, not real chat - skip them
                 return Ok(None);
             }
@@ -198,10 +189,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_NAME_QUERY response.
-    pub fn handle_name_query(
-        &mut self,
-        mut payload: Bytes,
-    ) -> Result<Vec<ChatMessage>, ProtocolError> {
+    pub fn handle_name_query(&mut self, mut payload: Bytes) -> Result<Vec<ChatMessage>> {
         let response = NameQueryResponse::decode(&mut payload)?;
 
         // Add to cache
@@ -240,7 +228,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_CHANNEL_NOTIFY.
-    pub fn handle_channel_notify(&self, mut payload: Bytes) -> Result<(), ProtocolError> {
+    pub fn handle_channel_notify(&self, mut payload: Bytes) -> Result<()> {
         let notify = ChannelNotify::decode(&mut payload)?;
         let desc = notify.description();
 
@@ -280,7 +268,7 @@ impl GameHandler {
     // =========================================================================
 
     /// Handle SMSG_GUILD_QUERY response.
-    pub fn handle_guild_query(&mut self, mut payload: Bytes) -> Result<(), ProtocolError> {
+    pub fn handle_guild_query(&mut self, mut payload: Bytes) -> Result<()> {
         let response = GuildQueryResponse::decode(&mut payload)?;
         debug!(
             "Guild info received: {} ({} ranks)",
@@ -292,7 +280,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_GUILD_ROSTER response.
-    pub fn handle_guild_roster(&mut self, mut payload: Bytes) -> Result<(), ProtocolError> {
+    pub fn handle_guild_roster(&mut self, mut payload: Bytes) -> Result<()> {
         let roster = GuildRoster::decode(&mut payload)?;
 
         debug!(
@@ -329,10 +317,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_GUILD_EVENT.
-    pub fn handle_guild_event(
-        &mut self,
-        mut payload: Bytes,
-    ) -> Result<Option<String>, ProtocolError> {
+    pub fn handle_guild_event(&mut self, mut payload: Bytes) -> Result<Option<String>> {
         let event = GuildEventPacket::decode(&mut payload)?;
 
         // Skip events from self (except MOTD)
@@ -439,7 +424,7 @@ impl GameHandler {
     // =========================================================================
 
     /// Handle SMSG_NOTIFICATION packet.
-    pub fn handle_notification(&self, mut payload: Bytes) -> Result<String, ProtocolError> {
+    pub fn handle_notification(&self, mut payload: Bytes) -> Result<String> {
         use crate::protocol::game::chat::ServerNotification;
         use crate::protocol::packets::PacketDecode;
 
@@ -449,7 +434,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_MOTD packet.
-    pub fn handle_motd(&mut self, mut payload: Bytes) -> Result<Option<String>, ProtocolError> {
+    pub fn handle_motd(&mut self, mut payload: Bytes) -> Result<Option<String>> {
         use crate::protocol::game::chat::ServerMotd;
         use crate::protocol::packets::PacketDecode;
 
@@ -465,10 +450,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_GM_MESSAGECHAT packet.
-    pub fn handle_gm_messagechat(
-        &mut self,
-        mut payload: Bytes,
-    ) -> Result<Option<ChatMessage>, ProtocolError> {
+    pub fn handle_gm_messagechat(&mut self, mut payload: Bytes) -> Result<Option<ChatMessage>> {
         use crate::protocol::game::chat::MessageChat;
 
         let msg = MessageChat::decode_(&mut payload, true)?;
@@ -480,7 +462,7 @@ impl GameHandler {
     fn process_chat_message(
         &mut self,
         msg: crate::protocol::game::chat::MessageChat,
-    ) -> Result<Option<ChatMessage>, ProtocolError> {
+    ) -> Result<Option<ChatMessage>> {
         use crate::protocol::game::chat::chat_events;
 
         // Ignore messages from self (except system messages)
@@ -514,7 +496,7 @@ impl GameHandler {
     }
 
     /// Handle SMSG_SERVER_MESSAGE packet.
-    pub fn handle_server_message(&self, mut payload: Bytes) -> Result<String, ProtocolError> {
+    pub fn handle_server_message(&self, mut payload: Bytes) -> Result<String> {
         use crate::protocol::game::chat::ServerMessage;
         use crate::protocol::packets::PacketDecode;
 

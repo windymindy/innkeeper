@@ -94,7 +94,7 @@ innkeeper/
 │   │
 │   └── common/
 │       ├── mod.rs
-│       ├── error.rs            # Error types (thiserror)
+│       ├── messages.rs         # Message types (BridgeChannels, etc.)
 │       ├── reconnect.rs        # Exponential backoff
 │       └── resources.rs        # Zone names, class names, etc.
 ```
@@ -178,7 +178,7 @@ serenity = { version = "0.12", features = ["client", "gateway"] }
 serde = { version = "1", features = ["derive"] }
 
 # Utilities
-thiserror = "1"
+anyhow = "1"                # Ergonomic error handling
 tracing = "0.1"
 tracing-subscriber = "0.3"
 regex = "1"
@@ -209,7 +209,7 @@ pub struct Packet {
 // Decoder for incoming packets
 impl Decoder for GamePacketCodec {
     type Item = Packet;
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
     
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         // 1. Check minimum header size
@@ -236,10 +236,10 @@ Key file to reference: `src/main/scala/wowchat/realm/HandshakeAscension.scala`
 ## 5. Implementation Phases
 
 ### Phase 1: Core Infrastructure
-- [ ] Project setup (Cargo.toml, directory structure)
-- [ ] Configuration parser (HOCON)
-- [ ] Error types and logging setup
-- [ ] Basic types (opcodes, constants)
+- [x] Project setup (Cargo.toml, directory structure)
+- [x] Configuration parser (HOCON)
+- [x] Error handling (anyhow) and logging setup
+- [x] Basic types (opcodes, constants)
 
 ### Phase 2: Realm Connection
 - [ ] TCP connection with Tokio

@@ -4,9 +4,9 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use crate::common::error::ProtocolError;
 use crate::common::types::{Guid, GuildEvent, GuildMember};
 use crate::protocol::packets::{PacketDecode, PacketEncode};
+use anyhow::{anyhow, Result};
 
 /// Guild event IDs from the protocol.
 /// WotLK values
@@ -36,14 +36,15 @@ pub struct GuildQueryResponse {
 }
 
 impl PacketDecode for GuildQueryResponse {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
 
         let guild_id = buf.get_u32_le();
@@ -186,14 +187,15 @@ pub struct GuildRoster {
 }
 
 impl PacketDecode for GuildRoster {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
 
         let member_count = buf.get_u32_le();
@@ -201,10 +203,11 @@ impl PacketDecode for GuildRoster {
         let guild_info = read_cstring(buf)?;
 
         if buf.remaining() < 4 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 4,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
         }
 
         let rank_count = buf.get_u32_le();
@@ -368,14 +371,15 @@ impl GuildEventPacket {
 }
 
 impl PacketDecode for GuildEventPacket {
-    type Error = ProtocolError;
+    type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
         if buf.remaining() < 2 {
-            return Err(ProtocolError::PacketTooShort {
-                needed: 2,
-                got: buf.remaining(),
-            });
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                2,
+                buf.remaining()
+            ));
         }
 
         let event_type = buf.get_u8();
@@ -394,7 +398,7 @@ impl PacketDecode for GuildEventPacket {
 }
 
 /// Helper function to read a null-terminated C string from the buffer.
-fn read_cstring(buf: &mut Bytes) -> Result<String, ProtocolError> {
+fn read_cstring(buf: &mut Bytes) -> Result<String> {
     let mut bytes = Vec::new();
     while buf.remaining() > 0 {
         let b = buf.get_u8();

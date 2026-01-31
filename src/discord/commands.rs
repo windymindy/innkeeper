@@ -48,7 +48,7 @@ impl CommandHandler {
         ctx: &Context,
         msg: &Message,
         content: &str,
-    ) -> Result<bool, serenity::Error> {
+    ) -> anyhow::Result<bool> {
         if !content.starts_with('!') {
             return Ok(false);
         }
@@ -82,7 +82,7 @@ impl CommandHandler {
         ctx: &Context,
         msg: &Message,
         args: Option<String>,
-    ) -> Result<(), serenity::Error> {
+    ) -> anyhow::Result<()> {
         info!("!who command from {} with args: {:?}", msg.author.name, args);
 
         let command = WowCommand::Who {
@@ -103,7 +103,7 @@ impl CommandHandler {
     }
 
     /// Handle !gmotd command.
-    async fn handle_gmotd(&self, ctx: &Context, msg: &Message) -> Result<(), serenity::Error> {
+    async fn handle_gmotd(&self, ctx: &Context, msg: &Message) -> anyhow::Result<()> {
         info!("!gmotd command from {}", msg.author.name);
 
         let command = WowCommand::GuildMotd {
@@ -122,7 +122,7 @@ impl CommandHandler {
     }
 
     /// Handle !help command.
-    async fn handle_help(&self, ctx: &Context, msg: &Message) -> Result<(), serenity::Error> {
+    async fn handle_help(&self, ctx: &Context, msg: &Message) -> anyhow::Result<()> {
         let help_text = r#"**Available Commands:**
 • `!who` - List online guild members
 • `!who <name>` - Search for a player
