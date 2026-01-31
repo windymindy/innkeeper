@@ -3,10 +3,6 @@
 //! This module defines the single source of truth for message types
 //! used in communication between Discord and WoW.
 
-use tokio::sync::mpsc;
-
-use crate::discord::commands::CommandResponse;
-
 /// Message from WoW destined for Discord.
 ///
 /// Used when forwarding chat messages from the WoW game client to Discord channels.
@@ -85,58 +81,4 @@ pub enum BridgeCommand {
     Who { reply_channel: u64 },
     /// Request guild MOTD.
     Gmotd { reply_channel: u64 },
-}
-
-/// Channels for bridge communication.
-///
-/// This struct groups all the communication channels needed for
-/// bidirectional message flow between Discord and WoW.
-pub struct BridgeChannels {
-    /// Sender for WoW -> Discord messages.
-    pub wow_tx: mpsc::UnboundedSender<WowMessage>,
-    /// Sender for Discord -> WoW messages (to game handler).
-    pub outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
-    /// Receiver for Discord -> WoW messages (game handler listens).
-    pub outgoing_wow_rx: mpsc::UnboundedReceiver<OutgoingWowMessage>,
-    /// Receiver for commands (game handler listens).
-    pub command_rx: mpsc::UnboundedReceiver<BridgeCommand>,
-    /// Sender for command responses (game handler sends).
-    pub command_response_tx: mpsc::UnboundedSender<CommandResponse>,
-}
-
-impl BridgeChannels {
-    /// Create a new set of bridge channels.
-    ///
-    /// Returns the channels struct along with:
-    /// - wow_rx: Receiver for WoW messages (for forwarding to Discord)
-    /// - command_tx: Sender for commands (Discord sends commands here)
-    /// - command_response_rx: Receiver for command responses
-    pub fn new() -> (
-        Self,
-        mpsc::UnboundedReceiver<WowMessage>,
-        mpsc::UnboundedSender<BridgeCommand>,
-        mpsc::UnboundedReceiver<CommandResponse>,
-    ) {
-        let (wow_tx, wow_rx) = mpsc::unbounded_channel();
-        let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
-        let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
-
-        let channels = Self {
-            wow_tx,
-            outgoing_wow_tx,
-            outgoing_wow_rx,
-            command_rx,
-            command_response_tx,
-        };
-
-        (channels, wow_rx, command_tx, command_response_rx)
-    }
-}
-
-impl Default for BridgeChannels {
-    fn default() -> Self {
-        let (channels, _, _, _) = Self::new();
-        channels
-    }
 }

@@ -3,6 +3,7 @@
 //! A clientless bot that connects to Ascension WoW server and relays
 //! messages between WoW guild/channels and Discord channels.
 
+mod bridge;
 mod common;
 mod config;
 mod discord;
@@ -16,10 +17,10 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+use bridge::{BridgeChannels, BridgeCommand, IncomingWowMessage};
 use config::{load_and_validate, env::get_config_path};
-use common::{BridgeChannels, BridgeCommand, IncomingWowMessage, OutgoingWowMessage, WowMessage};
 use discord::{
-    CommandResponse, DiscordBotBuilder, DiscordChannels, WowCommand,
+    DiscordBotBuilder, DiscordChannels, WowCommand,
 };
 use game::GameClient;
 use protocol::realm::connector::connect_and_authenticate;

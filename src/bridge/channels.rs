@@ -1,0 +1,81 @@
+//! Bridge channel management.
+//!
+//! Provides communication channel structures for the bridge,
+//! grouping related channels for Discord, WoW, and command handling.
+
+use tokio::sync::mpsc;
+
+use crate::common::{BridgeCommand, IncomingWowMessage, OutgoingWowMessage, WowMessage};
+use crate::discord::commands::CommandResponse;
+
+/// Channels for bridge communication.
+///
+/// This struct groups all the communication channels needed for
+/// bidirectional message flow between Discord and WoW.
+pub struct BridgeChannels {
+    /// Sender for WoW -> Discord messages.
+    pub wow_tx: mpsc::UnboundedSender<WowMessage>,
+    /// Sender for Discord -> WoW messages (to game handler).
+    pub outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
+    /// Receiver for Discord -> WoW messages (game handler listens).
+    pub outgoing_wow_rx: mpsc::UnboundedReceiver<OutgoingWowMessage>,
+    /// Receiver for commands (game handler listens).
+    pub command_rx: mpsc::UnboundedReceiver<BridgeCommand>,
+    /// Sender for command responses (game handler sends).
+    pub command_response_tx: mpsc::UnboundedSender<CommandResponse>,
+}
+
+impl BridgeChannels {
+    /// Create a new set of bridge channels.
+    ///
+    /// Returns the channels struct along with:
+    /// - wow_rx: Receiver for WoW messages (for forwarding to Discord)
+    /// - command_tx: Sender for commands (Discord sends commands here)
+    /// - command_response_rx: Receiver for command responses
+    pub fn new() -> (
+        Self,
+        mpsc::UnboundedReceiver<WowMessage>,
+        mpsc::UnboundedSender<BridgeCommand>,
+        mpsc::UnboundedReceiver<CommandResponse>,
+    ) {
+        let (wow_tx, wow_rx) = mpsc::unbounded_channel();
+        let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
+
+        let channels = Self {
+            wow_tx,
+            outgoing_wow_tx,
+            outgoing_wow_rx,
+            command_rx,
+            command_response_tx,
+        };
+
+        (channels, wow_rx, command_tx, command_response_rx)
+    }
+}
+
+impl Default for BridgeChannels {
+    fn default() -> Self {
+        let (channels, _, _, _) = Self::new();
+        channels
+    }
+}
+
+/// Channels for Discord communication.
+pub struct DiscordChannels {
+    /// Sender for Discord -> WoW messages.
+    pub outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
+    /// Receiver for WoW -> Discord messages.
+    pub wow_to_discord_rx: mpsc::UnboundedReceiver<IncomingWowMessage>,
+    /// Sender for commands to game handler.
+    pub command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
+}
+
+/// Channels for game (WoW) communication.
+pub struct GameChannels {
+    /// Receiver for messages to send to WoW.
+    pub outgoing_wow_rx: mpsc::UnboundedReceiver<OutgoingWowMessage>,
+    /// Receiver for bridge commands.
+    pub command_rx: mpsc::UnboundedReceiver<BridgeCommand>,
+}

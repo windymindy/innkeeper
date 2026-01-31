@@ -13,14 +13,15 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
+use crate::bridge::{BridgeState, ChannelConfig};
 use crate::common::{IncomingWowMessage, OutgoingWowMessage};
 use crate::config::types::Config;
+use crate::game::filter::MessageFilter;
 use crate::game::router::parse_channel_config;
 
 use super::commands::WowCommand;
-use super::handler::{BridgeHandler, BridgeState, ChannelConfig};
+use super::handler::BridgeHandler;
 use super::resolver::MessageResolver;
-use crate::game::filter::MessageFilter;
 
 /// Channels for Discord bot communication.
 pub struct DiscordChannels {

@@ -3,145 +3,21 @@
 //! Provides the event handler for Discord messages and manages
 //! the message flow between Discord and WoW.
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serenity::async_trait;
-use serenity::http::Http;
 use serenity::model::channel::{GuildChannel, Message};
 use serenity::model::gateway::Ready;
 use serenity::model::guild::Guild;
-use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::bridge::BridgeState;
 use crate::common::{IncomingWowMessage, OutgoingWowMessage};
 use crate::discord::commands::{CommandHandler, WowCommand};
-use crate::discord::resolver::MessageResolver;
-use crate::game::filter::MessageFilter;
 
-/// Configuration for a channel mapping.
-#[derive(Debug, Clone)]
-pub struct ChannelConfig {
-    pub discord_channel_id: Option<ChannelId>,
-    pub discord_channel_name: String,
-    pub wow_chat_type: u8,
-    pub wow_channel_name: Option<String>,
-    pub format_wow_to_discord: String,
-    pub format_discord_to_wow: String,
-}
-
-/// Shared state accessible from the event handler.
-pub struct BridgeState {
-    /// Map from (chat_type, channel_name) to Discord channels.
-    pub wow_to_discord: HashMap<(u8, Option<String>), Vec<ChannelConfig>>,
-    /// Map from Discord channel ID to WoW config.
-    pub discord_to_wow: HashMap<ChannelId, ChannelConfig>,
-    /// Sender for messages going to WoW.
-    pub wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
-    /// Sender for commands going to WoW handler.
-    pub command_tx: mpsc::UnboundedSender<WowCommand>,
-    /// Message resolver.
-    pub resolver: MessageResolver,
-    /// Message filter for filtering spam/unwanted messages.
-    pub filter: MessageFilter,
-    /// Pending channel configs waiting for Discord channel ID resolution.
-    /// Stored as (channel_name, direction, config) tuples.
-    pub pending_channel_configs: Vec<(String, String, ChannelConfig)>,
-    /// Whether dot commands passthrough is enabled.
-    pub enable_dot_commands: bool,
-    /// Whitelist of allowed dot commands (None = all allowed if enabled).
-    pub dot_commands_whitelist: Option<Vec<String>>,
-    /// HTTP client for Discord API calls.
-    pub http: Option<Arc<Http>>,
-}
-
-impl BridgeState {
-    /// Resolve Discord channel IDs from channel names after bot connects.
-    /// Returns the number of channels successfully resolved.
-    pub fn resolve_discord_channels(&mut self, guild_channels: &[GuildChannel]) -> usize {
-        let mut unresolved = Vec::new();
-        let mut resolved_channels: HashSet<ChannelId> = HashSet::new();
-
-        // Clear existing mappings to rebuild them
-        self.wow_to_discord.clear();
-        self.discord_to_wow.clear();
-
-        // Take ownership of pending configs
-        let pending = std::mem::take(&mut self.pending_channel_configs);
-
-        for (channel_name, direction, mut config) in pending {
-            // Find matching Discord channel by name
-            if let Some(discord_channel) = guild_channels.iter().find(|ch| {
-                ch.name().to_lowercase() == channel_name.to_lowercase()
-            }) {
-                // Update config with resolved channel ID
-                config.discord_channel_id = Some(discord_channel.id);
-
-                // Add to wow_to_discord mapping (lowercase channel name for consistent lookup)
-                let key = (config.wow_chat_type, config.wow_channel_name.as_ref().map(|s| s.to_lowercase()));
-                self.wow_to_discord.entry(key).or_default().push(config.clone());
-
-                // Add to discord_to_wow mapping if bidirectional
-                if direction == "both" || direction == "discord_to_wow" {
-                    self.discord_to_wow.insert(discord_channel.id, config.clone());
-                }
-
-                // Only log "Resolved" for the first time we see this Discord channel
-                if resolved_channels.insert(discord_channel.id) {
-                    info!("Resolved Discord channel '{}' -> ID {}", channel_name, discord_channel.id);
-                } else {
-                    debug!("Added additional mapping to '{}' for WoW channel {:?}", channel_name, config.wow_channel_name);
-                }
-            } else {
-                warn!("Could not resolve Discord channel: {}", channel_name);
-                // Save for retry later
-                unresolved.push((channel_name, direction, config));
-            }
-        }
-
-        // Put back unresolved configs
-        self.pending_channel_configs = unresolved;
-
-        // Return the number of unique Discord channels resolved
-        resolved_channels.len()
-    }
-
-    /// Check if a dot command message should be sent directly to WoW (passthrough).
-    /// Returns true if the command is allowed based on whitelist settings.
-    pub fn should_send_dot_command_directly(&self, message: &str) -> bool {
-        if !self.enable_dot_commands || !message.starts_with('.') {
-            return false;
-        }
-
-        // Extract the command name (everything after '.' until first space)
-        let cmd = message[1..].split_whitespace().next().unwrap_or("").to_lowercase();
-
-        // If no whitelist, all dot commands are allowed
-        if self.dot_commands_whitelist.is_none() {
-            return true;
-        }
-
-        // Check against whitelist
-        if let Some(ref whitelist) = self.dot_commands_whitelist {
-            for allowed in whitelist {
-                let allowed_lower = allowed.to_lowercase();
-                // Check exact match
-                if cmd == allowed_lower {
-                    return true;
-                }
-                // Check prefix match for wildcard patterns (e.g., "guild*" matches "guildinfo")
-                if allowed_lower.ends_with('*') && cmd.starts_with(&allowed_lower[..allowed_lower.len()-1]) {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-}
-
+// Re-export BridgeState's TypeMapKey implementation for Discord's context system
 impl TypeMapKey for BridgeState {
     type Value = Arc<RwLock<BridgeState>>;
 }
