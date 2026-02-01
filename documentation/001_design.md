@@ -51,6 +51,12 @@ innkeeper/
 ├── src/
 │   ├── main.rs                 # Entry point, runtime setup
 │   │
+│   ├── bridge/                 # Unified bridge module (Discord-WoW coordination)
+│   │   ├── mod.rs              # Module exports and documentation
+│   │   ├── channels.rs         # BridgeChannels, DiscordChannels, GameChannels
+│   │   ├── orchestrator.rs     # Bridge struct - message flow orchestration
+│   │   └── state.rs            # BridgeState, ChannelConfig - shared state
+│   │
 │   ├── config/
 │   │   ├── mod.rs
 │   │   ├── parser.rs           # HOCON parsing
@@ -73,7 +79,6 @@ innkeeper/
 │   │   │   ├── chat.rs         # Chat message handling
 │   │   │   └── guild.rs        # Guild roster/events
 │   │   │
-│   │   │
 │   │   └── packets/
 │   │       ├── mod.rs
 │   │       ├── opcodes.rs      # Packet opcode constants
@@ -88,13 +93,15 @@ innkeeper/
 │   │
 │   ├── game/
 │   │   ├── mod.rs
+│   │   ├── bridge.rs           # Re-exports from bridge
+│   │   ├── client.rs           # Game client connection
 │   │   ├── router.rs           # Message routing logic
 │   │   ├── formatter.rs        # Message formatting
 │   │   └── filter.rs           # Message filtering (regex)
 │   │
 │   └── common/
 │       ├── mod.rs
-│       ├── messages.rs         # Message types (BridgeChannels, etc.)
+│       ├── messages.rs         # Message types (BridgeChannels now in bridge/)
 │       ├── reconnect.rs        # Exponential backoff
 │       └── resources.rs        # Zone names, class names, etc.
 ```
@@ -151,41 +158,16 @@ Discord User types message
 
 ## 4. Technical Details
 
-### 4.1 Dependencies (Cargo.toml)
+### 4.1 Dependencies
 
-```toml
-[package]
-name = "wowchat-rs"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-
-# Networking & serialization
-bytes = "1"
-tokio-util = { version = "0.7", features = ["codec"] }
-
-# Cryptography
-sha1 = "0.10"
-
-# Discord (choose one during implementation)
-serenity = { version = "0.12", features = ["client", "gateway"] }
-# OR: twilight-gateway, twilight-http
-
-# Configuration
-serde = { version = "1", features = ["derive"] }
-
-# Utilities
-anyhow = "1"                # Ergonomic error handling
-tracing = "0.1"
-tracing-subscriber = "0.3"
-regex = "1"
-
-# Optional: emoji handling
-emojis = "0.6"
-```
+Dependencies are defined in `Cargo.toml`. Key dependencies include:
+- **tokio** - Async runtime
+- **bytes** - Zero-copy buffer management
+- **serenity** - Discord library
+- **serde** - Configuration serialization
+- **anyhow** - Error handling
+- **tracing** - Logging
+- **regex** - Message filtering
 
 ### 4.2 Cryptography Implementation
 
@@ -197,31 +179,7 @@ Port from `HandshakeAscension.scala`.
 Ascension version does not use HMAC-SHA1 based header encryption.
 Port from game packet encoder and decoder.
 
-### 4.3 Packet Codec
-
-```rust
-// Example packet structure
-pub struct Packet {
-    pub opcode: u16,
-    pub payload: Bytes,
-}
-
-// Decoder for incoming packets
-impl Decoder for GamePacketCodec {
-    type Item = Packet;
-    type Error = anyhow::Error;
-    
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // 1. Check minimum header size
-        // 2. Decrypt header if encryption enabled
-        // 3. Read size + opcode
-        // 4. Wait for full payload
-        // 5. Return packet
-    }
-}
-```
-
-### 4.4 Ascension-Specific Protocol
+### 4.3 Ascension-Specific Protocol
 
 Based on `HandshakeAscension.scala`, Ascension has custom:
 - Modified realm handshake (different packet structure)
@@ -233,62 +191,15 @@ Key file to reference: `src/main/scala/wowchat/realm/HandshakeAscension.scala`
 
 ---
 
-## 5. Implementation Phases
+## 5. Migration Notes
 
-### Phase 1: Core Infrastructure
-- [x] Project setup (Cargo.toml, directory structure)
-- [x] Configuration parser (HOCON)
-- [x] Error handling (anyhow) and logging setup
-- [x] Basic types (opcodes, constants)
-
-### Phase 2: Realm Connection
-- [ ] TCP connection with Tokio
-- [ ] Realm packet codec
-- [ ] Authentication handshake (ChaCha20Poly1305 and HmacSHA256 Ascension variant)
-- [ ] Realm list parsing
-- [ ] Session key extraction
-
-### Phase 3: Game Connection
-- [ ] Game server connection
-- [ ] Header and packet encoder and decoder without SRP-6a RC4 encryption
-- [ ] Auth challenge/response
-- [ ] Character enumeration
-- [ ] World login
-- [ ] Keep-alive / ping handling
-
-### Phase 4: Chat & Guild
-- [ ] Chat message parsing (SMSG_MESSAGECHAT)
-- [ ] Chat message sending (CMSG_MESSAGECHAT)
-- [ ] Guild roster (SMSG_GUILD_ROSTER)
-- [ ] Guild events (online/offline/motd)
-- [ ] Channel join/leave
-
-### Phase 5: Discord Integration
-- [ ] Bot connection and event loop
-- [ ] Message receiving
-- [ ] Message sending
-- [ ] Commands (!who, !gmotd)
-- [ ] Emoji/mention resolution
-
-### Phase 6: Polish
-- [ ] Message routing (bidirectional)
-- [ ] Message formatting
-- [ ] Filtering (regex patterns)
-- [ ] Reconnection logic
-- [ ] Guild dashboard
-- [ ] Testing and documentation
-
----
-
-## 6. Migration Notes
-
-### 6.1 Dropped Features
+### 5.1 Dropped Features
 
 Since we're targeting Ascension only:
 - Vanilla, TBC, Original WoTLK Cataclysm, MoP packet handlers (removed)
 - Version-specific branching (simplified)
 
-### 6.2 Key Files to Reference
+### 5.2 Key Files to Reference
 
 | Rust Module | Scala Source |
 |-------------|--------------|
@@ -300,7 +211,7 @@ Since we're targeting Ascension only:
 
 ---
 
-## 7. Testing Strategy
+## 6. Testing Strategy
 
 ### Unit Tests
 - Cryptography functions (known test vectors)
@@ -318,7 +229,7 @@ Since we're targeting Ascension only:
 
 ---
 
-## 8. Success Criteria
+## 7. Success Criteria
 
 | Metric | Target |
 |--------|--------|
@@ -330,7 +241,7 @@ Since we're targeting Ascension only:
 
 ---
 
-## 9. Risks and Mitigations
+## 8. Risks and Mitigations
 
 | Risk | Mitigation |
 |------|------------|
@@ -340,4 +251,4 @@ Since we're targeting Ascension only:
 ---
 
 *Document created: 2026-01-23*  
-*Last updated: 2026-01-23*
+*Last updated: 2026-02-01*
