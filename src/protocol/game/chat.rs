@@ -20,24 +20,12 @@ pub mod chat_events {
     pub const CHAT_MSG_YELL: u8 = 0x06;
     pub const CHAT_MSG_WHISPER: u8 = 0x07;
     pub const CHAT_MSG_WHISPER_INFORM: u8 = 0x09;
-    pub const CHAT_MSG_REPLY: u8 = 0x08;
     pub const CHAT_MSG_EMOTE: u8 = 0x0A;
-    pub const CHAT_MSG_TEXT_EMOTE: u8 = 0x0B;
-    pub const CHAT_MSG_MONSTER_SAY: u8 = 0x0C;
-    pub const CHAT_MSG_MONSTER_YELL: u8 = 0x0D;
     pub const CHAT_MSG_CHANNEL: u8 = 0x11;
-    pub const CHAT_MSG_CHANNEL_JOIN: u8 = 0x12;
-    pub const CHAT_MSG_CHANNEL_LEAVE: u8 = 0x13;
-    pub const CHAT_MSG_CHANNEL_LIST: u8 = 0x14;
-    pub const CHAT_MSG_CHANNEL_NOTICE: u8 = 0x15;
-    pub const CHAT_MSG_CHANNEL_NOTICE_USER: u8 = 0x16;
     pub const CHAT_MSG_IGNORED: u8 = 0x19;
-    pub const CHAT_MSG_RAID_LEADER: u8 = 0x28;
-    pub const CHAT_MSG_RAID_WARNING: u8 = 0x29;
-    pub const CHAT_MSG_RAID_BOSS_WHISPER: u8 = 0x2A;
-    pub const CHAT_MSG_RAID_BOSS_EMOTE: u8 = 0x2B;
-    pub const CHAT_MSG_BATTLEGROUND: u8 = 0x2C;
-    pub const CHAT_MSG_BATTLEGROUND_LEADER: u8 = 0x2D;
+    pub const CHAT_MSG_RAID_LEADER: u8 = 0x27;
+    pub const CHAT_MSG_RAID_WARNING: u8 = 0x28;
+    pub const CHAT_MSG_PARTY_LEADER: u8 = 0x33;
     pub const CHAT_MSG_ACHIEVEMENT: u8 = 0x30;
     pub const CHAT_MSG_GUILD_ACHIEVEMENT: u8 = 0x31;
 }
@@ -162,13 +150,39 @@ impl MessageChat {
         let chat_type = buf.get_u8();
         let language = buf.get_u32_le();
 
+        match chat_type {
+            chat_events::CHAT_MSG_SYSTEM => {}
+            chat_events::CHAT_MSG_SAY => {}
+            chat_events::CHAT_MSG_PARTY => {}
+            chat_events::CHAT_MSG_RAID => {}
+            chat_events::CHAT_MSG_GUILD => {}
+            chat_events::CHAT_MSG_OFFICER => {}
+            chat_events::CHAT_MSG_YELL => {}
+            chat_events::CHAT_MSG_WHISPER => {}
+            chat_events::CHAT_MSG_WHISPER_INFORM => {}
+            chat_events::CHAT_MSG_EMOTE => {}
+            chat_events::CHAT_MSG_CHANNEL => {}
+            chat_events::CHAT_MSG_IGNORED => {}
+            chat_events::CHAT_MSG_RAID_LEADER => {}
+            chat_events::CHAT_MSG_RAID_WARNING => {}
+            chat_events::CHAT_MSG_PARTY_LEADER => {}
+            chat_events::CHAT_MSG_ACHIEVEMENT => {}
+            chat_events::CHAT_MSG_GUILD_ACHIEVEMENT => {}
+            _ => { return Err(anyhow!("skip")); }
+        }
+
         // Addon messages have language -1, skip them
         if language == languages::LANG_ADDON {
-            return Err(anyhow!("Invalid packet: Addon message"));
+            return Err(anyhow!("skip"));
         }
 
         // Read sender GUID (8 bytes)
         let sender_guid = buf.get_u64_le();
+
+        // CHAT_MSG_IGNORED has a different packet structure - handle it separately
+        if chat_type == chat_events::CHAT_MSG_IGNORED {
+            return Err(anyhow!("skip"));
+        }
 
         // Skip 4 bytes (unknown field after sender GUID)
         if buf.remaining() >= 4 {

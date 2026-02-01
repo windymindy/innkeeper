@@ -183,8 +183,7 @@ impl GameHandler {
     pub fn handle_messagechat(&mut self, mut payload: Bytes) -> Result<Option<ChatMessage>> {
         let msg = match MessageChat::decode(&mut payload) {
             Ok(msg) => msg,
-            Err(e) if e.to_string().contains("Addon message") => {
-                // Addon messages are internal addon communication, not real chat - skip them
+            Err(e) if e.to_string().contains("skip") => {
                 return Ok(None);
             }
             Err(e) => return Err(e),
