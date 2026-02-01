@@ -102,7 +102,7 @@ pub fn validate_config(config: &Config) -> Result<()> {
     if let Some(ref filters) = config.filters {
         if let Some(ref patterns) = filters.patterns {
             for (i, pattern) in patterns.iter().enumerate() {
-                if regex::Regex::new(pattern).is_err() {
+                if fancy_regex::Regex::new(pattern).is_err() {
                     errors.push(format!(
                         "filters.patterns[{}] is not a valid regex: '{}'",
                         i, pattern

@@ -3,7 +3,7 @@
 //! Filters messages based on configurable regex patterns to prevent
 //! spam or unwanted messages from being relayed.
 
-use regex::Regex;
+use fancy_regex::Regex;
 use tracing::warn;
 
 /// Message filter that checks messages against regex patterns.
@@ -57,7 +57,12 @@ impl MessageFilter {
 
     /// Check if message matches any of the given patterns.
     fn matches_any(&self, patterns: &[CompiledPattern], message: &str) -> bool {
-        patterns.iter().any(|p| p.regex.is_match(message))
+        patterns.iter().any(|p| {
+            p.regex.is_match(message).unwrap_or_else(|e| {
+                warn!("Regex match error for pattern '{}': {}", p.original, e);
+                false
+            })
+        })
     }
 
     /// Returns true if the filter has any patterns configured.
@@ -156,5 +161,15 @@ mod tests {
         assert!(filter.should_filter_wow_to_discord("SPAM"));
         assert!(filter.should_filter_wow_to_discord("Spam"));
         assert!(filter.should_filter_wow_to_discord("spam"));
+    }
+
+    #[test]
+    fn test_negative_lookahead() {
+        // Pattern that matches "wtb" followed by "dp" but NOT if "wts" appears before "dp"
+        let filter = MessageFilter::new(Some(vec!["(?i).*wtb(((?!wts).)*)dp.*".to_string()]), None);
+        // Should match: wtb with dp, no wts
+        assert!(filter.should_filter_wow_to_discord("wtb any dp"));
+        // Should NOT match: has wts
+        assert!(!filter.should_filter_wow_to_discord("wtb wts dp"));
     }
 }

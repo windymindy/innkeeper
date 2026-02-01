@@ -42,7 +42,7 @@ hocon-rs = "0.1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-regex = "1"
+fancy-regex = "0.11"
 chrono = "0.4"
 
 # Optional: emoji handling

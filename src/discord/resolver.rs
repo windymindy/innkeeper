@@ -3,7 +3,7 @@
 //! Handles translation between WoW item links and Discord-friendly formats,
 //! emoji resolution, and @mention handling.
 
-use regex::Regex;
+use fancy_regex::Regex;
 use serenity::cache::Cache;
 use std::sync::OnceLock;
 
@@ -70,7 +70,7 @@ impl MessageResolver {
 
         for (link_type, pattern) in &self.link_patterns {
             result = pattern
-                .replace_all(&result, |caps: &regex::Captures| {
+                .replace_all(&result, |caps: &fancy_regex::Captures| -> String {
                     let id = &caps[1];
                     let name = &caps[2];
                     format!("[{}] (<{}?{}={}>) ", name, LINK_SITE, link_type, id)
@@ -122,7 +122,7 @@ impl MessageResolver {
             .collect();
 
         pattern
-            .replace_all(message, |caps: &regex::Captures| {
+            .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 let name = caps[1].to_lowercase();
                 emoji_map
                     .get(&name)
@@ -158,7 +158,7 @@ impl MessageResolver {
         let pattern = MENTION_PATTERN.get_or_init(|| Regex::new(r"<@!?(\d+)>").unwrap());
 
         pattern
-            .replace_all(message, |caps: &regex::Captures| {
+            .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 if let Ok(user_id) = caps[1].parse::<u64>() {
                     if let Some(user) = cache.user(serenity::model::id::UserId::new(user_id)) {
                         return format!("@{}", user.name);
@@ -175,7 +175,7 @@ impl MessageResolver {
         let pattern = CHANNEL_PATTERN.get_or_init(|| Regex::new(r"<#(\d+)>").unwrap());
 
         pattern
-            .replace_all(message, |caps: &regex::Captures| {
+            .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 if let Ok(channel_id) = caps[1].parse::<u64>() {
                     let channel_id = serenity::model::id::ChannelId::new(channel_id);
                     // Search through guilds to find the channel
@@ -198,7 +198,7 @@ impl MessageResolver {
         let pattern = ROLE_PATTERN.get_or_init(|| Regex::new(r"<@&(\d+)>").unwrap());
 
         pattern
-            .replace_all(message, |caps: &regex::Captures| {
+            .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 if let Ok(role_id) = caps[1].parse::<u64>() {
                     // Find the role in any guild
                     for guild_id in cache.guilds() {
