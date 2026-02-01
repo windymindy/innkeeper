@@ -170,6 +170,11 @@ impl GameHandler {
         }
     }
 
+    /// Build CMSG_LOGOUT_REQUEST.
+    pub fn build_logout_request(&self) -> crate::protocol::game::packets::LogoutRequest {
+        crate::protocol::game::packets::LogoutRequest
+    }
+
     // =========================================================================
     // Chat handling
     // =========================================================================

@@ -105,6 +105,7 @@ pub const CMSG_PLAYER_LOGIN: u16 = 0x003D;
 
 // --- World ---
 pub const SMSG_LOGIN_VERIFY_WORLD: u16 = 0x0236;
+pub const CMSG_LOGOUT_REQUEST: u16 = 0x004B;
 pub const SMSG_LOGOUT_COMPLETE: u16 = 0x004D;
 
 // --- Keep-alive ---
@@ -162,6 +163,7 @@ pub fn opcode_name(opcode: u16) -> &'static str {
         SMSG_CHAR_ENUM => "SMSG_CHAR_ENUM",
         CMSG_PLAYER_LOGIN => "CMSG_PLAYER_LOGIN",
         SMSG_LOGIN_VERIFY_WORLD => "SMSG_LOGIN_VERIFY_WORLD",
+        CMSG_LOGOUT_REQUEST => "CMSG_LOGOUT_REQUEST",
         CMSG_PING => "CMSG_PING",
         SMSG_PONG => "SMSG_PONG",
         SMSG_TIME_SYNC_REQ => "SMSG_TIME_SYNC_REQ",

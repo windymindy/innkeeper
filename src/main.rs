@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     // ============================================================
 
     // Create bridge channels (single source of truth)
-    let (game_channels, wow_rx, command_tx, cmd_response_rx) = BridgeChannels::new();
+    let (game_channels, wow_rx, command_tx, cmd_response_rx, shutdown_tx) = BridgeChannels::new();
 
     // Clone senders needed for Discord bot
     let outgoing_wow_tx = game_channels.outgoing_wow_tx.clone();
@@ -179,6 +179,8 @@ async fn main() -> Result<()> {
         channels_to_join,
     );
 
+
+
     // ============================================================
     // Start Discord bot
     // ============================================================
@@ -188,20 +190,40 @@ async fn main() -> Result<()> {
     });
 
     // ============================================================
+    // Start Game client in separate task
+    // ============================================================
+    let mut game_task = tokio::spawn(async move {
+        match game_client.run().await {
+            Ok(()) => info!("Game client disconnected"),
+            Err(e) => error!("Game client error: {}", e),
+        }
+    });
+
+    // ============================================================
     // Run both clients
     // ============================================================
-    tokio::select! {
-        result = game_client.run() => {
-            match result {
-                Ok(()) => info!("Game client disconnected"),
-                Err(e) => error!("Game client error: {}", e),
-            }
+    let shutdown = tokio::select! {
+        biased;
+        _ = shutdown_signal() => {
+            info!("Shutdown signal received - initiating graceful logout...");
+            true
         }
-        _ = discord_task => warn!("Discord client disconnected"),
-        _ = forward_to_discord => warn!("Forwarding ended"),
-        _ = forward_cmd_responses => warn!("Command responses ended"),
-        _ = command_converter => warn!("Command converter ended"),
-        _ = shutdown_signal() => info!("Shutdown signal received"),
+        _ = &mut game_task => false,
+        _ = discord_task => false,
+        _ = forward_to_discord => false,
+        _ = forward_cmd_responses => false,
+        _ = command_converter => false,
+    };
+
+    // Handle graceful shutdown
+    if shutdown {
+        let _ = shutdown_tx.send(true);
+        let timeout = tokio::time::Duration::from_secs(5);
+        match tokio::time::timeout(timeout, game_task).await {
+            Ok(Ok(())) => info!("Game client logged out gracefully"),
+            Ok(Err(e)) => warn!("Game client task panicked: {}", e),
+            Err(_) => warn!("Game client logout timed out"),
+        }
     }
 
     info!("Innkeeper shutting down...");

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
+
 use tracing::{info, warn};
 
 use crate::common::{BridgeChannels, BridgeCommand, WowMessage};
@@ -11,8 +12,8 @@ use crate::protocol::game::{new_game_connection, GameHandler};
 use crate::protocol::game::chat::chat_events;
 use crate::protocol::packets::opcodes::{
     SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_GM_MESSAGECHAT,
-    SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_LOGIN_VERIFY_WORLD, SMSG_MESSAGECHAT,
-    SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE,
+    SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_COMPLETE,
+    SMSG_MESSAGECHAT, SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE,
 };
 use crate::protocol::packets::PacketDecode;
 use crate::protocol::realm::connector::RealmSession;
@@ -59,6 +60,7 @@ impl GameClient {
             self.session.session_key,
             self.session.realm.id as u32,
         );
+        let mut shutdown_rx = self.channels.shutdown_rx.clone();
 
         info!("Game connection established");
 
@@ -273,6 +275,10 @@ impl GameClient {
                                     let pong = Pong::decode(&mut payload)?;
                                     handler.handle_pong(pong);
                                 }
+                                SMSG_LOGOUT_COMPLETE => {
+                                    info!("Logout complete - character logged out gracefully");
+                                    return Ok(());
+                                }
                                 _ => {
                                     // Ignore unknown packets
                                 }
@@ -280,6 +286,22 @@ impl GameClient {
                         }
                         Some(Err(e)) => return Err(e.into()),
                         None => return Ok(()), // Connection closed
+                    }
+                }
+                // Shutdown signal received - initiate graceful logout
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        if handler.in_world {
+                            info!("Shutdown signal received - logging out character...");
+                            let logout_req = handler.build_logout_request();
+                            if let Err(e) = connection.send(logout_req.into()).await {
+                                warn!("Failed to send logout request: {}", e);
+                            }
+                            // Wait briefly for logout complete or timeout
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            info!("Logout timeout or complete - closing connection");
+                        }
+                        return Ok(());
                     }
                 }
                 // Ping keepalive every 30 seconds
@@ -396,7 +418,7 @@ mod tests {
     async fn test_auth_flow() {
         let config = make_test_config();
         let session = make_test_session();
-        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx) = BridgeChannels::new();
+        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx, _shutdown_tx) = BridgeChannels::new();
         let mut client = GameClient::new(config, session, channels, Vec::new());
 
         let (client_stream, mut server_stream) = tokio::io::duplex(4096);

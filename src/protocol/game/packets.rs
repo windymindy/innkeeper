@@ -395,3 +395,22 @@ impl From<CharEnumRequest> for crate::protocol::packets::Packet {
         )
     }
 }
+
+/// CMSG_LOGOUT_REQUEST packet (empty payload).
+#[derive(Debug, Clone, Default)]
+pub struct LogoutRequest;
+
+impl PacketEncode for LogoutRequest {
+    fn encode(&self, _buf: &mut BytesMut) {
+        // Empty payload - just the opcode
+    }
+}
+
+impl From<LogoutRequest> for crate::protocol::packets::Packet {
+    fn from(_req: LogoutRequest) -> Self {
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_LOGOUT_REQUEST,
+            bytes::Bytes::new(),
+        )
+    }
+}
