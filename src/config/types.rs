@@ -151,6 +151,114 @@ where
     deserializer.deserialize_any(OptionU32Visitor)
 }
 
+/// Deserialize a String from either a string or an integer.
+/// This is useful for Discord channel IDs which can be specified as numbers in the config.
+fn string_or_int<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrIntVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrIntVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or integer")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrIntVisitor)
+}
+
+/// Deserialize a String from either a string, integer, or missing/null (defaults to empty string).
+/// This is useful for optional Discord channel IDs.
+fn string_or_int_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrIntDefaultVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrIntDefaultVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string, integer, or null")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(String::new())
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(String::new())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrIntDefaultVisitor)
+}
+
 /// Deserialize an Option<Vec<String>> that handles both Some(value) and None cases.
 fn option_vec_string<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
@@ -410,7 +518,8 @@ pub struct WowChannelConfig {
 /// Discord channel configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscordChannelConfig {
-    /// Discord channel name (not ID)
+    /// Discord channel name or ID (can be specified as string or integer)
+    #[serde(deserialize_with = "string_or_int")]
     pub channel: String,
     /// Format string for messages from Discord
     #[serde(default, deserialize_with = "option_string")]
@@ -437,8 +546,11 @@ pub struct GuildDashboardConfig {
     /// Whether the guild dashboard is enabled
     #[serde(default = "default_disabled", deserialize_with = "bool_or_int")]
     pub enabled: bool,
-    /// Discord channel name for online member list
-    #[serde(default = "default_empty_string")]
+    /// Discord channel name or ID for online member list
+    #[serde(
+        default = "default_empty_string",
+        deserialize_with = "string_or_int_default"
+    )]
     pub channel: String,
 }
 

@@ -1,7 +1,7 @@
 # Innkeeper Design
 
 **Date:** 2026-01-23  
-**Status:** Approved  
+**Status:** Active Development
 **Goal:** Full rewrite from Scala/JVM to Rust/Tokio for reduced RAM usage and elimination of JVM dependency
 
 ---
@@ -49,28 +49,31 @@
 innkeeper/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs                 # Entry point, runtime setup
+│   ├── main.rs                 # Application entry point
 │   │
-│   ├── bridge/                 # Unified bridge module (Discord-WoW coordination)
-│   │   ├── mod.rs              # Module exports and documentation
-│   │   ├── channels.rs         # BridgeChannels, DiscordChannels, GameChannels
+│   ├── bridge/                 # Message routing and orchestration
 │   │   ├── orchestrator.rs     # Bridge struct - message flow orchestration
-│   │   └── state.rs            # BridgeState, ChannelConfig - shared state
+│   │   ├── channels.rs         # BridgeChannels, DiscordChannels, GameChannels
+│   │   ├── state.rs            # BridgeState, ChannelConfig - shared state
+│   │   ├── filter.rs           # Regex filtering
+│   │   └── mod.rs
 │   │
-│   ├── config/
+│   ├── config/                 # Configuration loading and validation
 │   │   ├── mod.rs
 │   │   ├── parser.rs           # HOCON parsing
-│   │   └── types.rs            # Config structs
+│   │   ├── types.rs            # Config structs
+│   │   ├── validate.rs         # Configuration validation
+│   │   └── env.rs              # Environment variable handling
 │   │
-│   ├── protocol/
+│   ├── protocol/               # WoW protocol implementation
 │   │   ├── mod.rs
-│   │   ├── realm/
+│   │   ├── realm/             # Realm server (authentication)
 │   │   │   ├── mod.rs
 │   │   │   ├── connector.rs    # Realm server connection
 │   │   │   ├── handler.rs      # Packet handling
 │   │   │   └── packets.rs      # Realm packet definitions
 │   │   │
-│   │   ├── game/
+│   │   ├── game/              # Game server (packets, chat, guild)
 │   │   │   ├── mod.rs
 │   │   │   ├── connector.rs    # Game server connection
 │   │   │   ├── handler.rs      # Packet handling (WotLK/Ascension)
@@ -79,31 +82,30 @@ innkeeper/
 │   │   │   ├── chat.rs         # Chat message handling
 │   │   │   └── guild.rs        # Guild roster/events
 │   │   │
-│   │   └── packets/
+│   │   └── packets/           # Packet codec and opcodes
 │   │       ├── mod.rs
 │   │       ├── opcodes.rs      # Packet opcode constants
 │   │       └── codec.rs        # Encode/decode traits
 │   │
-│   ├── discord/
+│   ├── game/                   # Game client logic
 │   │   ├── mod.rs
-│   │   ├── bot.rs              # Discord bot setup
-│   │   ├── handler.rs          # Message event handling
-│   │   ├── commands.rs         # Slash/text commands (!who, etc)
-│   │   └── resolver.rs         # Emoji, link, tag resolution
+│   │   ├── client.rs          # Game client main loop
+│   │   ├── bridge.rs          # Bridge re-exports
+│   │   └── formatter.rs       # Message formatting
 │   │
-│   ├── game/
+│   ├── discord/                # Discord bot integration
 │   │   ├── mod.rs
-│   │   ├── bridge.rs           # Re-exports from bridge
-│   │   ├── client.rs           # Game client connection
-│   │   ├── router.rs           # Message routing logic
-│   │   ├── formatter.rs        # Message formatting
-│   │   └── filter.rs           # Message filtering (regex)
+│   │   ├── client.rs          # Discord bot setup
+│   │   ├── handler.rs         # Message event handling
+│   │   ├── commands.rs        # Slash/text commands (!who, etc)
+│   │   └── resolver.rs        # Emoji, link, tag resolution
 │   │
-│   └── common/
+│   └── common/                 # Shared types and utilities
 │       ├── mod.rs
-│       ├── messages.rs         # Message types (BridgeChannels now in bridge/)
-│       ├── reconnect.rs        # Exponential backoff
-│       └── resources.rs        # Zone names, class names, etc.
+│       ├── messages.rs         # Message types
+│       ├── types.rs            # Shared data structures
+│       ├── resources.rs        # Zone names, class names, etc.
+│       └── reconnect.rs        # Exponential backoff
 ```
 
 ### 3.2 Component Diagram
@@ -115,43 +117,43 @@ innkeeper/
 │  - Spawn Tokio runtime                                          │
 │  - Initialize Discord + WoW connections                         │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-           ┌──────────────────┼──────────────────┐
-           ▼                  ▼                  ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│    Discord      │  │     Game        │  │   Protocol      │
-│    Bot Task     │  │   (Channels)    │  │   (WoW Tasks)   │
-├─────────────────┤  ├─────────────────┤  ├─────────────────┤
-│ - Event loop    │  │ - wow_tx/rx     │  │ - Realm connect │
-│ - Commands      │◄─┤ - discord_tx/rx │─►│ - Game connect  │
-│ - Send messages │  │ - Routing       │  │ - Chat relay    │
-└─────────────────┘  └─────────────────┘  └─────────────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            ▼                  ▼                  ▼
+ ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+ │    Discord      │  │     Bridge      │  │   Protocol      │
+ │    Bot Task     │  │   (Message      │  │   (WoW Tasks)   │
+ │                 │  │   Routing)      │  │                 │
+ │ - Event loop    │◄─┤ - Channel maps  │─►│ - Realm connect │
+ │ - Commands      │  │ - Filtering     │  │ - Game connect  │
+ │ - Send messages │  │ - Formatting    │  │ - Chat relay    │
+ └─────────────────┘  └─────────────────┘  └─────────────────┘
 ```
 
 ### 3.3 Message Flow
 
 ```
 Discord User types message
-         │
-         ▼
-┌─────────────────┐
-│ Discord Handler │ ── filters, formats ──►┌─────────────┐
-└─────────────────┘                        │   Game      │
-                                           │  (mpsc tx)  │
-                                           └──────┬──────┘
-                                                  │
-                                                  ▼
-                                           ┌─────────────┐
-                                           │ Game Handler│
-                                           │ (mpsc rx)   │
-                                           └──────┬──────┘
-                                                  │
-                                                  ▼
-                                           ┌─────────────┐
-                                           │  WoW Server │
-                                           └─────────────┘
+          │
+          ▼
+┌─────────────────┐     ┌─────────────────┐
+│ Discord Handler │ ──► │     Bridge      │ ── filters, formats ──►┌─────────────┐
+└─────────────────┘     │   (mpsc tx)     │                        │   Game      │
+                        │ - Channel maps  │                        │  (mpsc tx)  │
+                        │ - Filtering     │                        └──────┬──────┘
+                        └──────┬─────────┘                               │
+                               │                                         ▼
+                               ▼                                  ┌─────────────┐
+                        ┌─────────────┐                          │ Game Handler│
+                        │ Bridge Cmd  │                          │ (mpsc rx)   │
+                        │ Processor   │                          └──────┬──────┘
+                        └─────────────┘                               │
+                                                                     ▼
+                                                              ┌─────────────┐
+                                                              │  WoW Server │
+                                                              └─────────────┘
 
-(Reverse flow for WoW → Discord)
+(Reverse flow for WoW → Discord: WoW Server → Game Handler → Bridge → Discord Handler)
 ```
 
 ---
@@ -251,4 +253,4 @@ Since we're targeting Ascension only:
 ---
 
 *Document created: 2026-01-23*  
-*Last updated: 2026-02-01*
+*Last updated: 2026-02-02*

@@ -191,7 +191,7 @@ impl EventHandler for BridgeHandler {
                 }
             }
 
-            warn!("WoW -> Discord forwarding task ended");
+            info!("WoW -> Discord forwarding task ended");
         });
     }
 

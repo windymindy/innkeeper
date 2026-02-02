@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
                     break;
                 }
             }
-            info!("Game->Discord forwarding task ended");
+            info!("Game -> Discord forwarding task ended");
         })
     };
 

@@ -54,34 +54,40 @@ discord {
 }
 
 wow {
-    realm {
-        host = "logon.project-ascension.com"
-        port = 3724
-        name = "Laughing Skull"  # or "Sargeras"
-    }
-
-    account {
-        username = "your_username"
-        password = "your_password"
-    }
-
+    realmlist = "logon.project-ascension.com:3724"
+    realm = "Laughing Skull"  # or "Sargeras"
+    account = "your_username"
+    password = "your_password"
     character = "YourCharacterName"
 }
 
 chat {
     channels = [
         {
-            wow = "guild"
-            discord = 123456789012345678  # Your Discord channel ID
             direction = "both"
+            wow = {
+                type = "Guild"
+            }
+            discord = {
+                channel = "guild-chat"  # Discord channel name
+            }
         }
+    ]
+}
+
+# Optional: Message filters
+filters {
+    enabled = true
+    patterns = [
+        "^\\[System\\].*",  # Block system messages
+        ".*achievement.*"   # Block achievement spam
     ]
 }
 ```
 
-3. Get your Discord channel ID:
-   - Enable Developer Mode in Discord (User Settings → Advanced → Developer Mode)
-   - Right-click your channel → Copy ID
+3. Get your Discord channel name:
+    - The channel name is the text after the # (e.g., "guild-chat" for #guild-chat)
+    - Channel names are case-sensitive and must match exactly
 
 ### Running
 
@@ -118,11 +124,17 @@ discord {
     # Required: Your Discord bot token
     token = "YOUR_TOKEN"
 
-    # Optional: Restrict bot to specific guild
-    guild_id = 123456789012345678
-
-    # Optional: Enable . prefix commands (default: false)
+    # Optional: Enable . prefix commands (default: true)
     enable_dot_commands = true
+
+    # Optional: Whitelist of allowed dot commands (empty = all allowed if enabled)
+    dot_commands_whitelist = ["help", "gm"]
+
+    # Optional: Restrict commands to specific channels (empty = all channels)
+    enable_commands_channels = ["bot-commands"]
+
+    # Optional: Notify on failed tag/mention resolution (default: true)
+    enable_tag_failed_notifications = true
 }
 ```
 
@@ -130,16 +142,19 @@ discord {
 
 ```hocon
 wow {
-    realm {
-        host = "logon.project-ascension.com"
-        port = 3724
-        name = "Laughing Skull"  # Exact realm name
-    }
 
-    account {
-        username = "your_username"
-        password = "your_password"
-    }
+    # Treat server's MotD as SYSTEM message (default: true)
+    enable_server_motd = true
+
+    # Realm list server (with optional port)
+    realmlist = "logon.project-ascension.com:3724"
+
+    # Realm name to connect to
+    realm = "Laughing Skull"
+
+    # Account credentials
+    account = "your_username"
+    password = "your_password"
 
     # Character to log in with
     character = "YourCharacterName"
@@ -152,27 +167,32 @@ wow {
 chat {
     channels = [
         {
-            # WoW channel types:
-            # - "guild" - Guild chat
-            # - "officer" - Officer chat
-            # - "say" - Say chat
-            # - "yell" - Yell chat
-            # - "emote" - Emotes
-            # - Any custom channel name
-            wow = "guild"
-
-            # Discord channel ID (right-click → Copy ID)
-            discord = 123456789012345678
-
-            # Message direction (optional)
+            # Message direction (optional, default: "both")
             # - "both" (default)
-            # - "wow_to_discord" or "w2d"
-            # - "discord_to_wow" or "d2w"
+            # - "wow_to_discord"
+            # - "discord_to_wow"
             direction = "both"
 
-            # Custom format (optional)
-            # Placeholders: %time, %user, %message, %channel
-            format = "[%time] %user: %message"
+            # WoW channel configuration
+            wow = {
+                # Channel type: Guild, Officer, Say, Yell, Emote, System, Channel, Whisper
+                type = "Guild"
+
+                # Channel name (for custom "Channel" type)
+                channel = "Trade"
+
+                # Format string (optional)
+                format = "[WoW] %user: %message"
+            }
+
+            # Discord channel configuration
+            discord = {
+                # Discord channel name (not ID)
+                channel = "guild-chat"
+
+                # Format string (optional)
+                format = "[Discord] %user: %message"
+            }
         }
     ]
 }
@@ -182,16 +202,40 @@ chat {
 
 ```hocon
 filters {
-    # Block messages from WoW to Discord
-    wow_to_discord = [
-        "^\\[System\\].*",           # System messages
-        ".*has earned the achievement.*"  # Achievements
-    ]
+    # Whether filtering is enabled (default: true)
+    enabled = true
 
-    # Block messages from Discord to WoW
-    discord_to_wow = [
-        "https?://.*"  # URLs
+    # Regex patterns to filter (Java regex syntax)
+    patterns = [
+        "^\\[System\\].*",           # System messages
+        ".*has earned the achievement.*",  # Achievements
+        "https?://.*"               # URLs
     ]
+}
+```
+
+### Guild Events (Optional)
+
+```hocon
+guild {
+    online = {
+        enabled = true
+        format = "%user has come online"
+    }
+    offline = {
+        enabled = true
+        format = "%user has gone offline"
+    }
+    # Other events: promoted, demoted, joined, left, removed, motd, achievement
+}
+```
+
+### Guild Dashboard (Optional)
+
+```hocon
+guild-dashboard {
+    enabled = true
+    channel = "guild-dashboard"  # Discord channel for online member list
 }
 ```
 
@@ -209,24 +253,32 @@ Dot commands (if enabled):
 
 ## Architecture
 
-Innkeeper uses a clean, modular architecture:
+Innkeeper uses a clean, modular architecture with async message passing:
 
 ```
-┌─────────────┐         ┌──────────┐         ┌─────────────┐
-│   Discord   │ ←──────→ │  Bridge  │ ←──────→ │  WoW Server │
-│     Bot     │  Messages│  Router  │  Packets │   Client    │
-└─────────────┘         └──────────┘         └─────────────┘
-                             │
-                             ↓
-                    ┌──────────────────┐
-                    │ Filter/Formatter │
-                    └──────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         main.rs                                  │
+│  - Load config                                                   │
+│  - Spawn Tokio runtime                                          │
+│  - Initialize Discord + WoW connections                         │
+└─────────────────────────────────────────────────────────────────┘
+                               │
+            ┌──────────────────┼──────────────────┐
+            ▼                  ▼                  ▼
+ ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+ │    Discord      │  │     Bridge      │  │   Protocol      │
+ │    Bot Task     │  │   (Message      │  │   (WoW Tasks)   │
+ │                 │  │   Routing)      │  │                 │
+ │ - Event loop    │◄─┤ - Channel maps  │─►│ - Realm connect │
+ │ - Commands      │  │ - Filtering     │  │ - Game connect  │
+ │ - Send messages │  │ - Formatting    │  │ - Chat relay    │
+ └─────────────────┘  └─────────────────┘  └─────────────────┘
 ```
 
-- **Bridge**: Central message router with filtering and formatting
-- **GameClient**: Async WoW protocol implementation
-- **Discord Bot**: Serenity-based Discord integration
+- **Bridge**: Central message router with filtering, formatting, and channel mapping
 - **Protocol Layer**: WotLK 3.3.5a + Ascension authentication
+- **Discord Bot**: Serenity-based integration with slash/text commands
+- **Message Flow**: Discord ↔ Bridge ↔ WoW with bidirectional filtering
 
 ## Development
 
@@ -243,7 +295,7 @@ cargo test -- --nocapture
 cargo test test_auth_flow
 ```
 
-All 52 tests should pass.
+All tests should pass.
 
 ### Building from Source
 
@@ -263,19 +315,54 @@ cargo build --release --features "some-feature"
 ```
 src/
 ├── main.rs                 # Application entry point
+├── bridge/                 # Message routing and orchestration
+│   ├── orchestrator.rs     # Bridge struct - message flow orchestration
+│   ├── channels.rs         # BridgeChannels, DiscordChannels, GameChannels
+│   ├── state.rs            # BridgeState, ChannelConfig - shared state
+│   ├── filter.rs           # Regex filtering
+│   └── mod.rs
 ├── config/                 # Configuration loading and validation
+│   ├── mod.rs
+│   ├── parser.rs           # HOCON parsing
+│   ├── types.rs            # Config structs
+│   ├── validate.rs         # Configuration validation
+│   └── env.rs              # Environment variable handling
 ├── protocol/               # WoW protocol implementation
+│   ├── mod.rs
 │   ├── realm/             # Realm server (authentication)
+│   │   ├── mod.rs
+│   │   ├── connector.rs    # Realm server connection
+│   │   ├── handler.rs      # Packet handling
+│   │   └── packets.rs      # Realm packet definitions
 │   ├── game/              # Game server (packets, chat, guild)
+│   │   ├── mod.rs
+│   │   ├── connector.rs    # Game server connection
+│   │   ├── handler.rs      # Packet handling (WotLK/Ascension)
+│   │   ├── header.rs       # Header encryption (WotLK/Ascension variant)
+│   │   ├── packets.rs      # Game packet definitions
+│   │   ├── chat.rs         # Chat message handling
+│   │   └── guild.rs        # Guild roster/events
 │   └── packets/           # Packet codec and opcodes
-├── game/                   # Game logic
+│       ├── mod.rs
+│       ├── opcodes.rs      # Packet opcode constants
+│       └── codec.rs        # Encode/decode traits
+├── game/                   # Game client logic
+│   ├── mod.rs
 │   ├── client.rs          # Game client main loop
-│   ├── bridge.rs          # Message routing orchestrator
-│   ├── router.rs          # Channel mapping
-│   ├── formatter.rs       # Message formatting
-│   └── filter.rs          # Regex filtering
+│   ├── bridge.rs          # Bridge re-exports
+│   └── formatter.rs       # Message formatting
 ├── discord/                # Discord bot integration
+│   ├── mod.rs
+│   ├── client.rs          # Discord bot setup
+│   ├── handler.rs         # Message event handling
+│   ├── commands.rs        # Slash/text commands (!who, etc)
+│   └── resolver.rs        # Emoji, link, tag resolution
 └── common/                 # Shared types and utilities
+    ├── mod.rs
+    ├── messages.rs         # Message types
+    ├── types.rs            # Shared data structures
+    ├── resources.rs        # Zone names, class names, etc.
+    └── reconnect.rs        # Exponential backoff
 ```
 
 ## Troubleshooting

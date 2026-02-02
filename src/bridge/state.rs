@@ -82,11 +82,18 @@ impl BridgeState {
         let pending = std::mem::take(&mut self.pending_channel_configs);
 
         for (channel_name, direction, mut config) in pending {
-            // Find matching Discord channel by name
-            if let Some(discord_channel) = guild_channels
-                .iter()
-                .find(|ch| ch.name().to_lowercase() == channel_name.to_lowercase())
-            {
+            // Find matching Discord channel by name OR ID
+            // The config value can be either a channel name or a numeric channel ID
+            if let Some(discord_channel) = guild_channels.iter().find(|ch| {
+                // First try matching as a channel ID (if the config value is numeric)
+                if let Ok(channel_id) = channel_name.parse::<u64>() {
+                    if ch.id.get() == channel_id {
+                        return true;
+                    }
+                }
+                // Then try matching by channel name (case-insensitive)
+                ch.name().to_lowercase() == channel_name.to_lowercase()
+            }) {
                 // Update config with resolved channel ID
                 config.discord_channel_id = Some(discord_channel.id);
 
@@ -108,9 +115,17 @@ impl BridgeState {
 
                 // Only log "Resolved" for the first time we see this Discord channel
                 if resolved_channels.insert(discord_channel.id) {
+                    // Determine if we matched by ID or by name for logging
+                    let match_type = if channel_name.parse::<u64>().is_ok() {
+                        "ID"
+                    } else {
+                        "name"
+                    };
                     tracing::info!(
-                        "Resolved Discord channel '{}' -> ID {}",
+                        "Resolved Discord channel '{}' (by {}) -> #{} (ID {})",
                         channel_name,
+                        match_type,
+                        discord_channel.name(),
                         discord_channel.id
                     );
                 } else {
