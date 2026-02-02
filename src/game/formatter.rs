@@ -125,17 +125,6 @@ fn get_time() -> String {
     Local::now().format("%H:%M:%S").to_string()
 }
 
-/// Escape Discord markdown characters in a message.
-///
-/// Escapes: ` * _ ~
-pub fn escape_discord_markdown(message: &str) -> String {
-    message
-        .replace('`', "\\`")
-        .replace('*', "\\*")
-        .replace('_', "\\_")
-        .replace('~', "\\~")
-}
-
 /// Split a message into chunks that fit within the max length.
 ///
 /// Tries to split on word boundaries when possible.
@@ -201,13 +190,6 @@ mod tests {
         // Time format should be HH:MM:SS
         assert!(result.contains("Player: Test"));
         assert!(result.starts_with('['));
-    }
-
-    #[test]
-    fn test_escape_discord_markdown() {
-        let input = "Hello `code` *bold* _italic_ ~~strike~~";
-        let expected = "Hello \\`code\\` \\*bold\\* \\_italic\\_ \\~\\~strike\\~\\~";
-        assert_eq!(escape_discord_markdown(input), expected);
     }
 
     #[test]

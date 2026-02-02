@@ -5,10 +5,46 @@
 
 use fancy_regex::Regex;
 use serenity::cache::Cache;
+use serenity::model::id::ChannelId;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// WotLK/Ascension link site for item/spell lookups.
 const LINK_SITE: &str = "https://db.ascension.gg/";
+
+/// Result of resolving tags in a message.
+#[derive(Debug, Clone)]
+pub struct TagResolutionResult {
+    /// The message with resolved tags.
+    pub message: String,
+    /// Any errors that occurred during tag resolution.
+    pub errors: Vec<String>,
+}
+
+/// Achievement database loaded from achievements.csv.
+static ACHIEVEMENTS: OnceLock<HashMap<u32, String>> = OnceLock::new();
+
+/// Load achievements from embedded CSV data.
+fn load_achievements() -> HashMap<u32, String> {
+    // Embedded achievements.csv content (from wowchat_ascension)
+    // We include the most common achievements inline for zero-dependency usage
+    let csv_data = include_str!("../../resources/achievements.csv");
+
+    csv_data
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, ',');
+            let id = parts.next()?.parse::<u32>().ok()?;
+            let name = parts.next()?.to_string();
+            Some((id, name))
+        })
+        .collect()
+}
+
+/// Get the achievements database, loading it if necessary.
+pub fn get_achievements() -> &'static HashMap<u32, String> {
+    ACHIEVEMENTS.get_or_init(load_achievements)
+}
 
 /// Message resolver for WoW <-> Discord message translation.
 #[derive(Debug, Clone)]
@@ -141,15 +177,6 @@ impl MessageResolver {
             .replace('~', "\\~")
     }
 
-    /// Process a message from WoW for Discord.
-    pub fn process_wow_to_discord(&self, cache: &Cache, message: &str) -> String {
-        let step1 = self.resolve_links(message);
-        let step2 = self.strip_texture_coding(&step1);
-        let step3 = self.strip_color_coding(&step2);
-        let step4 = self.resolve_emojis(cache, &step3);
-        step4
-    }
-
     /// Convert Discord @mentions to plain text for WoW.
     ///
     /// Converts <@123456789> to @username
@@ -233,6 +260,370 @@ impl MessageResolver {
         let step4 = self.resolve_custom_emojis_to_text(&step3);
         step4
     }
+
+    /// Pre-process WoW message content before Bridge formatting.
+    ///
+    /// This resolves WoW-specific formatting (links, colors, textures) that
+    /// should be cleaned BEFORE the message is formatted with templates.
+    /// After Bridge formatting, use `process_post_bridge()` for Discord-specific
+    /// processing (emojis, tags, markdown escaping).
+    pub fn process_pre_bridge(&self, message: &str) -> String {
+        let step1 = self.resolve_links(message);
+        let step2 = self.strip_texture_coding(&step1);
+        self.strip_color_coding(&step2)
+    }
+
+    /// Post-process a formatted message for Discord.
+    ///
+    /// This applies Discord-specific processing after Bridge formatting:
+    /// - Emoji resolution (requires cache)
+    /// - Tag resolution (@mentions)
+    /// - Markdown escaping (preserving mentions)
+    ///
+    /// Returns the processed message and any tag resolution errors.
+    pub fn process_post_bridge(
+        &self,
+        cache: &Cache,
+        channel_id: ChannelId,
+        message: &str,
+        self_user_id: u64,
+    ) -> TagResolutionResult {
+        // Resolve emojis
+        let step1 = self.resolve_emojis(cache, message);
+
+        // Resolve tags
+        let tag_result = self.resolve_tags(cache, channel_id, &step1, self_user_id);
+
+        // Escape markdown (preserving mentions)
+        let final_message = self.escape_discord_markdown_preserve_mentions(&tag_result.message);
+
+        TagResolutionResult {
+            message: final_message,
+            errors: tag_result.errors,
+        }
+    }
+
+    /// Resolve achievement ID to a formatted link with the achievement name.
+    ///
+    /// Looks up the achievement name from the achievements database and formats
+    /// a clickable link for Discord.
+    pub fn resolve_achievement_id(&self, achievement_id: u32) -> String {
+        let achievements = get_achievements();
+        let name = achievements
+            .get(&achievement_id)
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| "Unknown Achievement");
+        format!(
+            "[{}] (<{}?achievement={}>) ",
+            name, LINK_SITE, achievement_id
+        )
+    }
+
+    /// Resolve @tags in a message to Discord mentions.
+    ///
+    /// Converts @tag or "@tag with spaces" in WoW messages to proper Discord
+    /// `<@user_id>` or `<@&role_id>` mentions.
+    ///
+    /// This matches the Scala `resolveTags` behavior:
+    /// - Supports `@username` and `"@username with spaces"` patterns
+    /// - Matches against effective names (nicknames), usernames, and role names
+    /// - Uses fuzzy matching with priority for exact matches
+    /// - Reports errors when multiple matches are found
+    ///
+    /// Returns the message with resolved tags and any error messages.
+    pub fn resolve_tags(
+        &self,
+        cache: &Cache,
+        channel_id: ChannelId,
+        message: &str,
+        self_user_id: u64,
+    ) -> TagResolutionResult {
+        static TAG_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+        let patterns = TAG_PATTERNS.get_or_init(|| {
+            vec![
+                // Quoted tag: "@name with spaces"
+                Regex::new(r#""@(.+?)""#).unwrap(),
+                // Simple tag: @name
+                Regex::new(r"@([\w]+)").unwrap(),
+            ]
+        });
+
+        let mut errors = Vec::new();
+
+        // Collect channel members and roles for matching
+        // We need to find the guild that owns this channel
+        let mut effective_names: Vec<(String, String)> = Vec::new();
+        let mut user_names: Vec<(String, String)> = Vec::new();
+        let mut role_names: Vec<(String, String)> = Vec::new();
+
+        for guild_id in cache.guilds() {
+            if let Some(guild) = cache.guild(guild_id) {
+                // Check if this guild contains our channel
+                if guild.channels.contains_key(&channel_id) {
+                    // Collect members
+                    for (user_id, member) in &guild.members {
+                        // Skip self
+                        if user_id.get() == self_user_id {
+                            continue;
+                        }
+
+                        // Effective name (nickname or username)
+                        let effective_name =
+                            member.nick.as_ref().unwrap_or(&member.user.name).clone();
+                        effective_names.push((effective_name, user_id.get().to_string()));
+
+                        // Full username with discriminator (legacy format)
+                        let full_name = format!(
+                            "{}#{}",
+                            member.user.name,
+                            member.user.discriminator.map(|d| d.get()).unwrap_or(0)
+                        );
+                        user_names.push((full_name, user_id.get().to_string()));
+                    }
+
+                    // Collect roles
+                    for (role_id, role) in &guild.roles {
+                        if role.name != "@everyone" {
+                            // Prefix with & for role mentions
+                            role_names.push((role.name.clone(), format!("&{}", role_id.get())));
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Process each pattern
+        let mut result = message.to_string();
+
+        for pattern in patterns {
+            result = pattern
+                .replace_all(&result, |caps: &fancy_regex::Captures| -> String {
+                    let tag = &caps[1];
+
+                    // Try to resolve the tag
+                    let matches = self.resolve_tag_matcher(&effective_names, tag, false);
+                    let matches = if matches.len() == 1 {
+                        matches
+                    } else {
+                        let user_matches = self.resolve_tag_matcher(&user_names, tag, false);
+                        if !matches.is_empty() && !user_matches.is_empty() {
+                            if matches.len() == 1 {
+                                matches
+                            } else {
+                                // Combine matches
+                                let mut combined = matches;
+                                combined.extend(user_matches);
+                                combined
+                            }
+                        } else if matches.is_empty() {
+                            user_matches
+                        } else {
+                            matches
+                        }
+                    };
+                    let matches = if matches.len() == 1 {
+                        matches
+                    } else {
+                        let role_matches = self.resolve_tag_matcher(&role_names, tag, true);
+                        if matches.is_empty() {
+                            role_matches
+                        } else if role_matches.is_empty() || matches.len() == 1 {
+                            matches
+                        } else {
+                            // Combine matches
+                            let mut combined = matches;
+                            combined.extend(role_matches);
+                            combined
+                        }
+                    };
+
+                    if matches.len() == 1 {
+                        format!("<@{}>", matches[0].1)
+                    } else if matches.len() > 1 && matches.len() < 5 {
+                        let names: Vec<&str> = matches.iter().map(|(name, _)| name.as_str()).collect();
+                        errors.push(format!(
+                            "Your tag @{} matches multiple channel members: {}. Be more specific in your tag!",
+                            tag,
+                            names.join(", ")
+                        ));
+                        caps[0].to_string()
+                    } else if matches.len() >= 5 {
+                        errors.push(format!(
+                            "Your tag @{} matches too many channel members. Be more specific in your tag!",
+                            tag
+                        ));
+                        caps[0].to_string()
+                    } else {
+                        // No matches, leave original
+                        caps[0].to_string()
+                    }
+                })
+                .to_string();
+        }
+
+        TagResolutionResult {
+            message: result,
+            errors,
+        }
+    }
+
+    /// Helper to match a tag against a list of (name, id) pairs.
+    ///
+    /// Returns matching pairs with preference for:
+    /// 1. Exact matches
+    /// 2. Whole-word matches
+    /// 3. Substring matches
+    fn resolve_tag_matcher(
+        &self,
+        names: &[(String, String)],
+        tag: &str,
+        is_role: bool,
+    ) -> Vec<(String, String)> {
+        let lower_tag = tag.to_lowercase();
+
+        // Skip @here as it's a Discord keyword
+        if lower_tag == "here" {
+            return Vec::new();
+        }
+
+        // Find all names containing the tag as a substring
+        let initial_matches: Vec<&(String, String)> = names
+            .iter()
+            .filter(|(name, _)| name.to_lowercase().contains(&lower_tag))
+            .collect();
+
+        if initial_matches.is_empty() {
+            return Vec::new();
+        }
+
+        // If we have multiple matches and the tag doesn't contain spaces, try to narrow down
+        if initial_matches.len() > 1 && !lower_tag.contains(' ') {
+            // First, try to find an exact match
+            if let Some(exact) = initial_matches
+                .iter()
+                .find(|(name, _)| name.to_lowercase() == lower_tag)
+            {
+                return vec![(exact.0.clone(), exact.1.clone())];
+            }
+
+            // Try to find matches where the tag is a whole word in the name
+            let word_matches: Vec<&(String, String)> = initial_matches
+                .iter()
+                .filter(|(name, _)| {
+                    name.to_lowercase()
+                        .split(|c: char| !c.is_alphanumeric())
+                        .any(|word| word == lower_tag)
+                })
+                .copied()
+                .collect();
+
+            if !word_matches.is_empty() {
+                return word_matches
+                    .into_iter()
+                    .map(|(name, id)| {
+                        let formatted_id = if is_role && !id.starts_with('&') {
+                            format!("&{}", id)
+                        } else {
+                            id.clone()
+                        };
+                        (name.clone(), formatted_id)
+                    })
+                    .collect();
+            }
+        }
+
+        // Return all initial matches
+        initial_matches
+            .into_iter()
+            .map(|(name, id)| {
+                let formatted_id = if is_role && !id.starts_with('&') {
+                    format!("&{}", id)
+                } else {
+                    id.clone()
+                };
+                (name.clone(), formatted_id)
+            })
+            .collect()
+    }
+
+    /// Process a message from WoW for Discord.
+    ///
+    /// This is the full processing pipeline that includes:
+    /// - Link resolution (items, spells, quests, achievements)
+    /// - Texture/color stripping
+    /// - Emoji resolution
+    /// - Tag resolution (@mentions)
+    /// - Markdown escaping
+    ///
+    /// Returns the processed message and any tag resolution errors.
+    pub fn process_wow_to_discord(
+        &self,
+        cache: &Cache,
+        channel_id: ChannelId,
+        message: &str,
+        self_user_id: u64,
+    ) -> TagResolutionResult {
+        // First, do the basic processing
+        let step1 = self.resolve_links(message);
+        let step2 = self.strip_texture_coding(&step1);
+        let step3 = self.strip_color_coding(&step2);
+        let step4 = self.resolve_emojis(cache, &step3);
+
+        // Then resolve tags
+        let tag_result = self.resolve_tags(cache, channel_id, &step4, self_user_id);
+
+        // Finally escape markdown (but preserve Discord mentions)
+        let final_message = self.escape_discord_markdown_preserve_mentions(&tag_result.message);
+
+        TagResolutionResult {
+            message: final_message,
+            errors: tag_result.errors,
+        }
+    }
+
+    /// Escape Discord markdown but preserve Discord mention syntax.
+    fn escape_discord_markdown_preserve_mentions(&self, message: &str) -> String {
+        // We need to escape markdown but NOT the <@id> or <@&id> mentions
+        static MENTION_PLACEHOLDER: OnceLock<Regex> = OnceLock::new();
+        let mention_pattern =
+            MENTION_PLACEHOLDER.get_or_init(|| Regex::new(r"<@[&!]?\d+>").unwrap());
+
+        // Find all mentions and their positions
+        let mut mentions: Vec<(usize, usize, String)> = Vec::new();
+        let message_clone = message.to_string();
+
+        for caps in mention_pattern.captures_iter(&message_clone).flatten() {
+            if let Some(m) = caps.get(0) {
+                mentions.push((m.start(), m.end(), m.as_str().to_string()));
+            }
+        }
+
+        if mentions.is_empty() {
+            return self.escape_discord_markdown(message);
+        }
+
+        // Build result by escaping non-mention parts
+        let mut result = String::new();
+        let mut last_end = 0;
+
+        for (start, end, mention) in mentions {
+            // Escape the part before this mention
+            if start > last_end {
+                result.push_str(&self.escape_discord_markdown(&message[last_end..start]));
+            }
+            // Add the mention as-is
+            result.push_str(&mention);
+            last_end = end;
+        }
+
+        // Escape any remaining text after the last mention
+        if last_end < message.len() {
+            result.push_str(&self.escape_discord_markdown(&message[last_end..]));
+        }
+
+        result
+    }
 }
 
 #[cfg(test)]
@@ -283,5 +674,103 @@ mod tests {
         let input = "Hello <:pepega:123456789> world <a:animated:987654321>";
         let output = resolver.resolve_custom_emojis_to_text(input);
         assert_eq!(output, "Hello :pepega: world :animated:");
+    }
+
+    #[test]
+    fn test_resolve_achievement_id() {
+        let resolver = MessageResolver::new();
+
+        // Test known achievement (Level 10 = ID 6)
+        let output = resolver.resolve_achievement_id(6);
+        assert!(output.contains("Level 10"));
+        assert!(output.contains("db.ascension.gg"));
+        assert!(output.contains("achievement=6"));
+
+        // Test unknown achievement
+        let output = resolver.resolve_achievement_id(999999999);
+        assert!(output.contains("Unknown Achievement"));
+    }
+
+    #[test]
+    fn test_tag_matcher_exact_match() {
+        let resolver = MessageResolver::new();
+
+        let names = vec![
+            ("John".to_string(), "123".to_string()),
+            ("Johnny".to_string(), "456".to_string()),
+            ("JohnDoe".to_string(), "789".to_string()),
+        ];
+
+        // Exact match should return single result
+        let matches = resolver.resolve_tag_matcher(&names, "john", false);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].0, "John");
+        assert_eq!(matches[0].1, "123");
+    }
+
+    #[test]
+    fn test_tag_matcher_partial_match() {
+        let resolver = MessageResolver::new();
+
+        let names = vec![
+            ("Alice Smith".to_string(), "123".to_string()),
+            ("Bob".to_string(), "456".to_string()),
+        ];
+
+        // Partial match
+        let matches = resolver.resolve_tag_matcher(&names, "alice", false);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].0, "Alice Smith");
+    }
+
+    #[test]
+    fn test_tag_matcher_role_prefix() {
+        let resolver = MessageResolver::new();
+
+        let names = vec![("Moderator".to_string(), "123".to_string())];
+
+        // Role should get & prefix
+        let matches = resolver.resolve_tag_matcher(&names, "moderator", true);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].1, "&123");
+    }
+
+    #[test]
+    fn test_tag_matcher_skip_here() {
+        let resolver = MessageResolver::new();
+
+        let names = vec![("here".to_string(), "123".to_string())];
+
+        // @here should be skipped
+        let matches = resolver.resolve_tag_matcher(&names, "here", false);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn test_escape_markdown_preserve_mentions() {
+        let resolver = MessageResolver::new();
+
+        let input = "**bold** <@123456> text _italic_ <@&789012> more";
+        let output = resolver.escape_discord_markdown_preserve_mentions(input);
+
+        // Markdown should be escaped
+        assert!(output.contains("\\*\\*bold\\*\\*"));
+        assert!(output.contains("\\_italic\\_"));
+
+        // Mentions should be preserved
+        assert!(output.contains("<@123456>"));
+        assert!(output.contains("<@&789012>"));
+    }
+
+    #[test]
+    fn test_get_achievements_loads() {
+        let achievements = get_achievements();
+
+        // Should have loaded at least some achievements
+        assert!(!achievements.is_empty());
+
+        // Check for known achievement
+        assert!(achievements.contains_key(&6)); // Level 10
+        assert_eq!(achievements.get(&6), Some(&"Level 10".to_string()));
     }
 }

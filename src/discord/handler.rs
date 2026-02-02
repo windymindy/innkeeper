@@ -11,7 +11,7 @@ use serenity::model::gateway::Ready;
 use serenity::model::guild::Guild;
 use serenity::prelude::*;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState};
 use crate::common::{BridgeMessage, DiscordMessage};
@@ -133,11 +133,13 @@ impl EventHandler for BridgeHandler {
         info!("Discord bot connected as {}", ready.user.name);
 
         // Store our user ID and HTTP client, then wait for guild data
+        let self_user_id = ready.user.id.get();
         {
             let data = ctx.data.read().await;
             if let Some(state) = data.get::<BridgeState>() {
                 let mut state = state.write().await;
                 state.http = Some(ctx.http.clone());
+                state.self_user_id = Some(self_user_id);
 
                 info!("Connected to Discord. Waiting for guild data to resolve channels...");
                 info!("Pending channels to resolve: {}", state.pending_channel_configs.len());
@@ -147,6 +149,7 @@ impl EventHandler for BridgeHandler {
         // Start WoW -> Discord forwarding task
         let wow_rx = Arc::clone(&self.wow_rx);
         let http = ctx.http.clone();
+        let cache = ctx.cache.clone();
         let data = ctx.data.clone();
 
         tokio::spawn(async move {
@@ -157,13 +160,18 @@ impl EventHandler for BridgeHandler {
                 if let Some(bridge) = data.get::<Bridge>() {
                     if let Some(state) = data.get::<BridgeState>() {
                         let state = state.read().await;
+                        let self_user_id = state.self_user_id.unwrap_or(0);
+                        let enable_tag_notifications = state.enable_tag_failed_notifications;
+
+                        // Pre-process WoW content (resolve links, strip colors/textures) BEFORE formatting
+                        let processed_content = state.resolver.process_pre_bridge(&msg.content);
 
                         // Process and filter message through Bridge (with optional format override)
                         let results = bridge.handle_wow_to_discord(
                             msg.chat_type,
                             msg.channel_name.as_deref(),
                             msg.sender.as_deref(),
-                            &msg.content,
+                            &processed_content,
                             msg.format.as_deref(),
                         );
 
@@ -177,10 +185,53 @@ impl EventHandler for BridgeHandler {
                                 for config in channel_configs {
                                     if config.discord_channel_name == discord_channel_name {
                                         if let Some(channel_id) = config.discord_channel_id {
-                                            match channel_id.say(&http, &formatted).await {
-                                                Ok(_) => {}
+                                        // Apply post-bridge processing (emojis, tags, markdown escape)
+                                        let (final_message, tag_errors) = if msg.sender.is_some() {
+                                            let result = state.resolver.process_post_bridge(
+                                                &cache,
+                                                channel_id,
+                                                &formatted,
+                                                self_user_id,
+                                            );
+                                            (result.message, result.errors)
+                                        } else {
+                                            (formatted.clone(), Vec::new())
+                                        };
+
+                                            // Send the message to Discord
+                                            match channel_id.say(&http, &final_message).await {
+                                                Ok(_) => {
+                                                    debug!(
+                                                        "Sent to Discord #{}: {}",
+                                                        discord_channel_name, final_message
+                                                    );
+                                                }
                                                 Err(e) => {
                                                     error!("Failed to send to Discord channel {}: {}", discord_channel_name, e);
+                                                }
+                                            }
+
+                                            // Handle tag resolution errors
+                                            if enable_tag_notifications && !tag_errors.is_empty() {
+                                                for error_msg in &tag_errors {
+                                                    // Send error to Discord channel
+                                                    if let Err(e) = channel_id.say(&http, error_msg).await {
+                                                        warn!("Failed to send tag error to Discord: {}", e);
+                                                    }
+
+                                                    // Send whisper back to WoW sender
+                                                    if let Some(ref sender) = msg.sender {
+                                                        let whisper_msg = BridgeMessage {
+                                                            sender: None,
+                                                            content: error_msg.clone(),
+                                                            chat_type: 7, // CHAT_MSG_WHISPER
+                                                            channel_name: Some(sender.clone()),
+                                                            format: None,
+                                                        };
+                                                        if let Err(e) = state.wow_tx.send(whisper_msg) {
+                                                            warn!("Failed to send tag error whisper to WoW: {}", e);
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

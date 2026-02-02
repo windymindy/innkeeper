@@ -45,6 +45,10 @@ pub struct BridgeState {
     pub dot_commands_whitelist: Option<Vec<String>>,
     /// HTTP client for Discord API calls.
     pub http: Option<std::sync::Arc<Http>>,
+    /// Bot's user ID (set after connection).
+    pub self_user_id: Option<u64>,
+    /// Whether to send tag resolution error notifications.
+    pub enable_tag_failed_notifications: bool,
 }
 
 impl BridgeState {
@@ -65,6 +69,31 @@ impl BridgeState {
             enable_dot_commands,
             dot_commands_whitelist,
             http: None,
+            self_user_id: None,
+            enable_tag_failed_notifications: false,
+        }
+    }
+
+    /// Create a new bridge state with tag notification config.
+    pub fn with_tag_notifications(
+        wow_tx: mpsc::UnboundedSender<BridgeMessage>,
+        command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
+        enable_dot_commands: bool,
+        dot_commands_whitelist: Option<Vec<String>>,
+        enable_tag_failed_notifications: bool,
+    ) -> Self {
+        Self {
+            wow_to_discord: HashMap::new(),
+            discord_to_wow: HashMap::new(),
+            wow_tx,
+            command_tx,
+            resolver: MessageResolver::new(),
+            pending_channel_configs: Vec::new(),
+            enable_dot_commands,
+            dot_commands_whitelist,
+            http: None,
+            self_user_id: None,
+            enable_tag_failed_notifications,
         }
     }
 
