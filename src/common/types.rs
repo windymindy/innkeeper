@@ -102,6 +102,7 @@ pub struct ChatMessage {
     pub sender_name: String,
     pub channel_name: Option<String>,
     pub content: String,
+    pub format: Option<String>,
 }
 
 /// Guild information.

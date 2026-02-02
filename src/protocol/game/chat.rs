@@ -125,6 +125,24 @@ impl MessageChat {
             sender_name,
             channel_name: self.channel_name.clone(),
             content: self.message.clone(),
+            format: None,
+        }
+    }
+
+    /// Convert to common ChatMessage type with custom format.
+    pub fn to_chat_message_with_format(
+        &self,
+        sender_name: String,
+        format: Option<String>,
+    ) -> ChatMessage {
+        ChatMessage {
+            chat_type: ChatType::from_id(self.chat_type).unwrap_or(ChatType::System),
+            language: self.language,
+            sender_guid: self.sender_guid,
+            sender_name,
+            channel_name: self.channel_name.clone(),
+            content: self.message.clone(),
+            format,
         }
     }
 }
@@ -168,7 +186,9 @@ impl MessageChat {
             chat_events::CHAT_MSG_PARTY_LEADER => {}
             chat_events::CHAT_MSG_ACHIEVEMENT => {}
             chat_events::CHAT_MSG_GUILD_ACHIEVEMENT => {}
-            _ => { return Err(anyhow!("skip")); }
+            _ => {
+                return Err(anyhow!("skip"));
+            }
         }
 
         // Addon messages have language -1, skip them
@@ -179,9 +199,19 @@ impl MessageChat {
         // Read sender GUID (8 bytes)
         let sender_guid = buf.get_u64_le();
 
-        // CHAT_MSG_IGNORED has a different packet structure - handle it separately
+        // CHAT_MSG_IGNORED has a simpler packet structure:
+        // Just the GUID, convert to WHISPER_INFORM with custom format
         if chat_type == chat_events::CHAT_MSG_IGNORED {
-            return Err(anyhow!("skip"));
+            return Ok(MessageChat {
+                chat_type: chat_events::CHAT_MSG_WHISPER_INFORM,
+                language,
+                sender_guid,
+                channel_name: None,
+                target_guid: None,
+                message_length: 0,
+                message: "is ignoring you".to_string(),
+                chat_tag: 0,
+            });
         }
 
         // Skip 4 bytes (unknown field after sender GUID)
@@ -600,6 +630,21 @@ impl PacketDecode for ServerNotification {
 #[derive(Debug, Clone)]
 pub struct ServerMotd {
     pub lines: Vec<String>,
+}
+
+/// SMSG_CHAT_PLAYER_NOT_FOUND packet - Player not found for whisper.
+#[derive(Debug, Clone)]
+pub struct ChatPlayerNotFound {
+    pub player_name: String,
+}
+
+impl PacketDecode for ChatPlayerNotFound {
+    type Error = anyhow::Error;
+
+    fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
+        let player_name = read_cstring(buf)?;
+        Ok(ChatPlayerNotFound { player_name })
+    }
 }
 
 impl ServerMotd {

@@ -58,7 +58,15 @@ pub fn validate_config(config: &Config) -> Result<()> {
 
         // Validate channel type
         let valid_types = [
-            "Guild", "Officer", "Say", "Yell", "Emote", "System", "Channel", "Whisper",
+            "Guild",
+            "Officer",
+            "Say",
+            "Yell",
+            "Emote",
+            "System",
+            "Channel",
+            "Whisper",
+            "Whispering",
         ];
         if !valid_types.contains(&mapping.wow.channel_type.as_str()) {
             errors.push(format!(

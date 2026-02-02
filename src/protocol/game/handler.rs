@@ -8,8 +8,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::common::types::{ChatMessage, GuildInfo, GuildMember, Player};
 use crate::protocol::game::chat::{
-    get_language_for_race, ChannelNotify, JoinChannelWotLK, MessageChat, NameQuery,
-    NameQueryResponse, SendChatMessage,
+    get_language_for_race, ChannelNotify, ChatPlayerNotFound, JoinChannelWotLK, MessageChat,
+    NameQuery, NameQueryResponse, SendChatMessage,
 };
 use crate::protocol::game::guild::{
     GuildEventPacket, GuildQuery, GuildQueryResponse, GuildRoster, GuildRosterRequest,
@@ -477,6 +477,58 @@ impl GameHandler {
             }
         }
 
+        // Handle CHAT_MSG_IGNORED - convert to WHISPER_INFORM with format
+        // Note: This is handled in decode, but the message comes through here with custom content
+        if msg.chat_type == chat_events::CHAT_MSG_WHISPER_INFORM && msg.message == "is ignoring you"
+        {
+            // Need to look up the player name for the GUID
+            if let Some(player) = self.player_names.get(&msg.sender_guid) {
+                return Ok(Some(ChatMessage {
+                    chat_type: crate::common::types::ChatType::WhisperInform,
+                    language: msg.language,
+                    sender_guid: msg.sender_guid,
+                    sender_name: player.name.clone(),
+                    channel_name: None,
+                    content: msg.message.clone(),
+                    format: Some("%user %message.".to_string()),
+                }));
+            }
+            // Queue for name resolution if we don't know the name
+            let chat_msg = ChatMessage {
+                chat_type: crate::common::types::ChatType::WhisperInform,
+                language: msg.language,
+                sender_guid: msg.sender_guid,
+                sender_name: format!("Unknown-{}", msg.sender_guid),
+                channel_name: None,
+                content: msg.message.clone(),
+                format: Some("%user %message.".to_string()),
+            };
+            self.pending_messages
+                .entry(msg.sender_guid)
+                .or_default()
+                .push(chat_msg);
+            return Ok(None);
+        }
+
+        // Handle system messages that are whisper-related (AFK/DND responses)
+        if msg.chat_type == chat_events::CHAT_MSG_SYSTEM {
+            let txt_lower = msg.message.to_lowercase();
+            if txt_lower.contains("is away from keyboard")
+                || txt_lower.contains("does not wish to be disturbed")
+            {
+                // Convert to WHISPER_INFORM with custom format
+                return Ok(Some(ChatMessage {
+                    chat_type: crate::common::types::ChatType::WhisperInform,
+                    language: msg.language,
+                    sender_guid: 0,
+                    sender_name: String::new(),
+                    channel_name: None,
+                    content: msg.message.clone(),
+                    format: Some("%message.".to_string()),
+                }));
+            }
+        }
+
         // If sender GUID is 0, it's a system message - no name lookup needed
         if msg.sender_guid == 0 {
             return Ok(Some(msg.to_chat_message(String::new())));
@@ -509,5 +561,23 @@ impl GameHandler {
 
         info!("Server message: {}", formatted);
         Ok(formatted)
+    }
+
+    /// Handle SMSG_CHAT_PLAYER_NOT_FOUND packet.
+    /// Returns a ChatMessage with error format for relaying to Discord.
+    pub fn handle_chat_player_not_found(&self, mut payload: Bytes) -> Result<Option<ChatMessage>> {
+        let not_found = ChatPlayerNotFound::decode(&mut payload)?;
+        debug!("Chat player not found: {}", not_found.player_name);
+
+        // Create a message that will be sent to the WHISPER_INFORM channel
+        Ok(Some(ChatMessage {
+            chat_type: crate::common::types::ChatType::WhisperInform,
+            language: 0,
+            sender_guid: 0,
+            sender_name: not_found.player_name,
+            channel_name: None,
+            content: String::new(),
+            format: Some("No player named '%user' is currently playing.".to_string()),
+        }))
     }
 }

@@ -11,7 +11,7 @@ use crate::discord::commands::CommandResponse;
 use crate::protocol::game::{new_game_connection, GameHandler};
 use crate::protocol::game::chat::chat_events;
 use crate::protocol::packets::opcodes::{
-    SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_GM_MESSAGECHAT,
+    SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_GM_MESSAGECHAT,
     SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_COMPLETE,
     SMSG_MESSAGECHAT, SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE,
 };
@@ -130,7 +130,7 @@ impl GameClient {
                                                  content: chat_msg.content,
                                                  chat_type: chat_msg.chat_type.to_id(),
                                                  channel_name: chat_msg.channel_name,
-                                                 format: None,
+                                                 format: chat_msg.format,
                                              };
                                             
                                             if let Err(e) = self.channels.wow_tx.send(wow_msg) {
@@ -158,7 +158,7 @@ impl GameClient {
                                                  content: chat_msg.content,
                                                  chat_type: chat_msg.chat_type.to_id(),
                                                  channel_name: chat_msg.channel_name,
-                                                 format: None,
+                                                 format: chat_msg.format,
                                              };
                                         
                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
@@ -231,7 +231,7 @@ impl GameClient {
                                                  content: chat_msg.content,
                                                  chat_type: chat_msg.chat_type.to_id(),
                                                  channel_name: chat_msg.channel_name,
-                                                 format: None,
+                                                 format: chat_msg.format,
                                              };
 
                                              if let Err(e) = self.channels.wow_tx.send(wow_msg) {
@@ -262,6 +262,21 @@ impl GameClient {
                                          };
                                          if let Err(e) = self.channels.wow_tx.send(wow_msg) {
                                              warn!("Failed to send server message to bridge: {}", e);
+                                         }
+                                     }
+                                }
+                                SMSG_CHAT_PLAYER_NOT_FOUND => {
+                                     if let Ok(Some(chat_msg)) = handler.handle_chat_player_not_found(payload) {
+                                         // Send "player not found" as WHISPER_INFORM to Discord
+                                         let wow_msg = BridgeMessage {
+                                             sender: Some(chat_msg.sender_name),
+                                             content: chat_msg.content,
+                                             chat_type: chat_msg.chat_type.to_id(),
+                                             channel_name: chat_msg.channel_name,
+                                             format: chat_msg.format,
+                                         };
+                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                             warn!("Failed to send player not found message to bridge: {}", e);
                                          }
                                      }
                                 }

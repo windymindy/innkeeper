@@ -501,7 +501,7 @@ fn default_direction() -> String {
 /// WoW channel configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WowChannelConfig {
-    /// Channel type: Guild, Officer, Say, Yell, Emote, System, Channel, Whisper
+    /// Channel type: Guild, Officer, Say, Yell, Emote, System, Channel, Whisper, Whispering
     #[serde(rename = "type")]
     pub channel_type: String,
     /// Channel name (for custom channels)

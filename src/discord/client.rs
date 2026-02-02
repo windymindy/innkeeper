@@ -102,16 +102,18 @@ impl DiscordBotBuilder {
                 discord_channel_name: channel.discord.channel.clone(),
                 wow_chat_type,
                 wow_channel_name,
+                // discord.format is used for messages going TO Discord (WoW → Discord)
                 format_wow_to_discord: channel
-                    .wow
-                    .format
-                    .clone()
-                    .unwrap_or_else(|| "%user: %message".to_string()),
-                format_discord_to_wow: channel
                     .discord
                     .format
                     .clone()
                     .unwrap_or_else(|| "[%user]: %message".to_string()),
+                // wow.format is used for messages going TO WoW (Discord → WoW)
+                format_discord_to_wow: channel
+                    .wow
+                    .format
+                    .clone()
+                    .unwrap_or_else(|| "%user: %message".to_string()),
             };
 
             pending_configs.push((channel.discord.channel.clone(), channel.direction.clone(), channel_config));

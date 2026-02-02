@@ -95,6 +95,26 @@ impl Bridge {
                 continue;
             }
 
+            // Preprocess message for whisper channels ("/w <target> <message>" syntax)
+            let (processed_content, whisper_target) =
+                self.preprocess_whisper_message(&msg.content, route.chat_type);
+
+            // Skip empty messages (invalid whisper format)
+            if processed_content.is_empty() {
+                debug!(
+                    chat_type = ?route.chat_type,
+                    "Skipping message - invalid whisper format or empty content"
+                );
+                continue;
+            }
+
+            // For whisper messages, override the channel_name with the target
+            let actual_channel_name = if whisper_target.is_some() {
+                whisper_target.clone()
+            } else {
+                route.wow_channel_name.clone()
+            };
+
             // Get format and create formatter
             let format = route
                 .discord_to_wow_format
@@ -106,7 +126,7 @@ impl Bridge {
 
             // Calculate max message length and split if needed
             let max_len = formatter.max_message_length(&msg.sender, 255);
-            let chunks = split_message(&msg.content, max_len);
+            let chunks = split_message(&processed_content, max_len);
 
             for chunk in chunks {
                 let ctx = FormatContext::new(&msg.sender, &chunk);
@@ -119,7 +139,7 @@ impl Bridge {
                 {
                     info!(
                         chat_type = ?route.chat_type,
-                        channel_name = ?route.wow_channel_name,
+                        channel_name = ?actual_channel_name,
                         "FILTERED Discord -> WoW (global): {}",
                         formatted
                     );
@@ -131,7 +151,7 @@ impl Bridge {
                     if filter.should_filter(FilterDirection::DiscordToWow, &formatted) {
                         info!(
                             chat_type = ?route.chat_type,
-                            channel_name = ?route.wow_channel_name,
+                            channel_name = ?actual_channel_name,
                             "FILTERED Discord -> WoW (channel): {}",
                             formatted
                         );
@@ -141,14 +161,14 @@ impl Bridge {
 
                 info!(
                     chat_type = ?route.chat_type,
-                    channel_name = ?route.wow_channel_name,
+                    channel_name = ?actual_channel_name,
                     "Discord -> WoW: {}",
                     formatted
                 );
 
                 results.push(BridgeMessage {
                     chat_type: route.chat_type.to_id(),
-                    channel_name: route.wow_channel_name.clone(),
+                    channel_name: actual_channel_name.clone(),
                     sender: Some(msg.sender.clone()),
                     content: formatted,
                     format: None,
@@ -157,6 +177,51 @@ impl Bridge {
         }
 
         results
+    }
+
+    /// Preprocess a message for whisper channels.
+    ///
+    /// For ChatType::Whisper channels, messages must be in format `/w <target> <message>`.
+    /// Returns (processed_message, whisper_target). If the message is invalid for a whisper
+    /// channel, returns empty string.
+    fn preprocess_whisper_message(
+        &self,
+        message: &str,
+        chat_type: ChatType,
+    ) -> (String, Option<String>) {
+        // Only preprocess for Whisper type channels
+        if chat_type != ChatType::Whisper {
+            return (message.to_string(), None);
+        }
+
+        // Must start with "/w " (case-insensitive)
+        let prefix = "/w ";
+        if !message.to_lowercase().starts_with(prefix) {
+            return (String::new(), None);
+        }
+
+        // Extract content after "/w "
+        let after_prefix = &message[prefix.len()..];
+
+        // Find the first space to separate target from message
+        let first_space = match after_prefix.find(' ') {
+            Some(pos) => pos,
+            None => return (String::new(), None), // No message after target
+        };
+
+        let target = &after_prefix[..first_space];
+        let actual_message = &after_prefix[first_space + 1..];
+
+        // Validate target name: 3-12 characters, letters only
+        if target.len() < 3 || target.len() > 12 {
+            return (String::new(), None);
+        }
+        if !target.chars().all(|c| c.is_ascii_alphabetic()) {
+            return (String::new(), None);
+        }
+
+        // Return the extracted message and target
+        (actual_message.to_string(), Some(target.to_string()))
     }
 
     /// Process a message from WoW and prepare for Discord.
@@ -169,6 +234,7 @@ impl Bridge {
         channel_name: Option<&str>,
         sender: Option<&str>,
         content: &str,
+        format_override: Option<&str>,
     ) -> Vec<(String, String)> {
         let routes = self.router.get_discord_targets(chat_type, channel_name);
 
@@ -180,11 +246,10 @@ impl Bridge {
         let mut results = Vec::new();
 
         for route in routes {
-            // Get format and create formatter
-            let format = route
-                .wow_to_discord_format
-                .as_ref()
-                .cloned()
+            // Get format (use override if provided, otherwise use config or default)
+            let format = format_override
+                .map(String::from)
+                .or_else(|| route.wow_to_discord_format.clone())
                 .unwrap_or_else(|| "[%user]: %message".to_string());
 
             let formatter = MessageFormatter::new(&format);
@@ -393,8 +458,10 @@ impl MessageRouter {
                 wow_channel_name: wow_channel_name.clone(),
                 discord_channel_name: mapping.discord.channel.clone(),
                 direction: Direction::from_str(&mapping.direction),
-                wow_to_discord_format: mapping.wow.format.clone(),
-                discord_to_wow_format: mapping.discord.format.clone(),
+                // discord.format is used for messages going TO Discord (WoW → Discord)
+                wow_to_discord_format: mapping.discord.format.clone(),
+                // wow.format is used for messages going TO WoW (Discord → WoW)
+                discord_to_wow_format: mapping.wow.format.clone(),
             };
 
             let idx = routes.len();

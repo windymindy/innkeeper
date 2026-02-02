@@ -11,7 +11,7 @@ use serenity::model::gateway::Ready;
 use serenity::model::guild::Guild;
 use serenity::prelude::*;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::bridge::{Bridge, BridgeState};
 use crate::common::{BridgeMessage, DiscordMessage};
@@ -158,12 +158,13 @@ impl EventHandler for BridgeHandler {
                     if let Some(state) = data.get::<BridgeState>() {
                         let state = state.read().await;
 
-                        // Process and filter message through Bridge
+                        // Process and filter message through Bridge (with optional format override)
                         let results = bridge.handle_wow_to_discord(
                             msg.chat_type,
                             msg.channel_name.as_deref(),
                             msg.sender.as_deref(),
                             &msg.content,
+                            msg.format.as_deref(),
                         );
 
                         // Send filtered messages to appropriate Discord channels
