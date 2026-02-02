@@ -19,7 +19,7 @@ use crate::protocol::game::packets::{
     LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 use crate::protocol::packets::PacketDecode;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 /// Game protocol handler state.
 pub struct GameHandler {

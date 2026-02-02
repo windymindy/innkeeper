@@ -3,12 +3,12 @@
 //! This module defines the single source of truth for message types
 //! used in communication between Discord and WoW.
 
-/// Message from WoW destined for Discord.
+/// Bridge message for Discord <-> WoW communication.
 ///
-/// Used when forwarding chat messages from the WoW game client to Discord channels.
+/// Used for bidirectional message flow between Discord and the WoW game client.
 #[derive(Debug, Clone)]
-pub struct IncomingWowMessage {
-    /// Sender's name (None for system messages).
+pub struct BridgeMessage {
+    /// Sender's name (None for system messages from WoW, Some for player messages).
     pub sender: Option<String>,
     /// Message content.
     pub content: String,
@@ -16,49 +16,8 @@ pub struct IncomingWowMessage {
     pub chat_type: u8,
     /// Channel name for custom channels.
     pub channel_name: Option<String>,
-}
-
-/// Message from Discord destined for WoW.
-///
-/// Used when forwarding messages from Discord to the WoW game client.
-#[derive(Debug, Clone)]
-pub struct OutgoingWowMessage {
-    /// WoW chat type to send as.
-    pub chat_type: u8,
-    /// Channel name for custom channels.
-    pub channel_name: Option<String>,
-    /// Sender's Discord display name.
-    pub sender: String,
-    /// Message content (already formatted).
-    pub content: String,
-}
-
-/// Message from WoW with optional format override.
-///
-/// Extended version of IncomingWowMessage used internally by the bridge.
-#[derive(Debug, Clone)]
-pub struct WowMessage {
-    /// Sender's name (None for system messages).
-    pub sender: Option<String>,
-    /// Message content.
-    pub content: String,
-    /// WoW chat type.
-    pub chat_type: u8,
-    /// Channel name for custom channels.
-    pub channel_name: Option<String>,
-    /// Custom format override (optional).
+    /// Optional custom format override (mainly used internally by bridge).
     pub format: Option<String>,
-}
-
-impl From<WowMessage> for IncomingWowMessage {
-    fn from(msg: WowMessage) -> Self {
-        Self {
-            sender: msg.sender,
-            content: msg.content,
-            chat_type: msg.chat_type,
-            channel_name: msg.channel_name,
-        }
-    }
 }
 
 /// Message from Discord to be processed by the bridge.

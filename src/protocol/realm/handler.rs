@@ -7,11 +7,11 @@ use chacha20poly1305::{
 };
 use hmac::{digest::KeyInit as HmacKeyInit, Hmac, Mac};
 use sha2::Sha256;
-use tracing::{debug, trace};
+use tracing::debug;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::protocol::realm::packets::{AuthResult, RealmInfo};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -443,9 +443,9 @@ impl RealmHandler {
                 id,
                 name,
                 address,
-                realm_type,
-                flags,
-                characters,
+                _realm_type: realm_type,
+                _flags: flags,
+                _characters: characters,
             });
         }
 

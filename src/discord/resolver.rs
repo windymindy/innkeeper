@@ -235,49 +235,6 @@ impl MessageResolver {
     }
 }
 
-/// Split a long message into chunks that fit within WoW's message limit (255 chars).
-pub fn split_message(format: &str, sender: &str, message: &str, time: &str) -> Vec<String> {
-    let template_len = format
-        .replace("%time", time)
-        .replace("%user", sender)
-        .replace("%message", "")
-        .len();
-
-    let max_msg_len = 255 - template_len;
-    let mut result = Vec::new();
-    let mut remaining = message;
-
-    while remaining.len() > max_msg_len {
-        // Try to split at a space
-        let split_at = remaining[..max_msg_len].rfind(' ').unwrap_or(max_msg_len);
-
-        result.push(remaining[..split_at].to_string());
-        remaining = remaining[split_at..].trim_start();
-    }
-
-    if !remaining.is_empty() {
-        result.push(remaining.to_string());
-    }
-
-    // Apply format to each chunk
-    result
-        .into_iter()
-        .map(|msg| {
-            let formatted = format
-                .replace("%time", time)
-                .replace("%user", sender)
-                .replace("%message", &msg);
-
-            // Prevent accidental dot commands
-            if formatted.starts_with('.') {
-                format!(" {}", formatted)
-            } else {
-                formatted
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,16 +283,5 @@ mod tests {
         let input = "Hello <:pepega:123456789> world <a:animated:987654321>";
         let output = resolver.resolve_custom_emojis_to_text(input);
         assert_eq!(output, "Hello :pepega: world :animated:");
-    }
-
-    #[test]
-    fn test_split_message() {
-        let format = "[%user]: %message";
-        let chunks = split_message(format, "TestUser", "a".repeat(300).as_str(), "12:00");
-
-        assert!(chunks.len() > 1);
-        for chunk in &chunks {
-            assert!(chunk.len() <= 255);
-        }
     }
 }

@@ -10,7 +10,7 @@ use serenity::model::channel::GuildChannel;
 use serenity::model::id::ChannelId;
 use tokio::sync::mpsc;
 
-use crate::common::OutgoingWowMessage;
+use crate::common::BridgeMessage;
 use crate::discord::resolver::MessageResolver;
 
 /// Configuration for a channel mapping.
@@ -31,7 +31,7 @@ pub struct BridgeState {
     /// Map from Discord channel ID to WoW config.
     pub discord_to_wow: HashMap<ChannelId, ChannelConfig>,
     /// Sender for messages going to WoW.
-    pub wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
+    pub wow_tx: mpsc::UnboundedSender<BridgeMessage>,
     /// Sender for commands going to WoW handler.
     pub command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
     /// Message resolver.
@@ -50,7 +50,7 @@ pub struct BridgeState {
 impl BridgeState {
     /// Create a new bridge state.
     pub fn new(
-        wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
+        wow_tx: mpsc::UnboundedSender<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
         enable_dot_commands: bool,
         dot_commands_whitelist: Option<Vec<String>>,

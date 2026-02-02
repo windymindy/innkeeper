@@ -14,9 +14,9 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState, ChannelConfig};
-use crate::common::{IncomingWowMessage, OutgoingWowMessage};
+use crate::common::BridgeMessage;
 use crate::config::types::Config;
-use crate::game::router::parse_channel_config;
+use crate::bridge::orchestrator::parse_channel_config;
 
 use super::commands::WowCommand;
 use super::handler::BridgeHandler;
@@ -25,9 +25,9 @@ use super::resolver::MessageResolver;
 /// Channels for Discord bot communication.
 pub struct DiscordChannels {
     /// Sender for outgoing WoW messages (Discord -> WoW).
-    pub outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
+    pub outgoing_wow_tx: mpsc::UnboundedSender<BridgeMessage>,
     /// Receiver for incoming WoW messages (WoW -> Discord).
-    pub wow_to_discord_rx: mpsc::UnboundedReceiver<IncomingWowMessage>,
+    pub wow_to_discord_rx: mpsc::UnboundedReceiver<BridgeMessage>,
     /// Sender for commands from Discord.
     pub command_tx: mpsc::UnboundedSender<WowCommand>,
 }
@@ -48,7 +48,7 @@ impl ClientConfig {
     /// Build a new serenity Client with the stored configuration.
     async fn build_client(
         &self,
-        wow_rx: mpsc::UnboundedReceiver<IncomingWowMessage>,
+        wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
     ) -> anyhow::Result<Client> {
         let handler = BridgeHandler::new(wow_rx, command_tx);
@@ -183,7 +183,7 @@ pub struct DiscordBot {
     http: Arc<Http>,
     config: ClientConfig,
     // Keep senders to create new receivers for reconnection
-    outgoing_wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
+    outgoing_wow_tx: mpsc::UnboundedSender<BridgeMessage>,
     command_tx: mpsc::UnboundedSender<WowCommand>,
 }
 
@@ -213,7 +213,7 @@ impl DiscordBot {
                     // Create new channel for WoW -> Discord messages
                     // Note: The sender side (game client) keeps sending to outgoing_wow_tx
                     // We create a new receiver that will be used by the new handler
-                    let (_new_wow_tx, new_wow_rx) = mpsc::unbounded_channel::<IncomingWowMessage>();
+                    let (_new_wow_tx, new_wow_rx) = mpsc::unbounded_channel::<BridgeMessage>();
 
                     // Update the shared state with new channel info if needed
                     // The outgoing_wow_tx is already stored in shared state

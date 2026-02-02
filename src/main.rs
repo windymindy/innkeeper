@@ -17,7 +17,7 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use bridge::{BridgeChannels, BridgeCommand, IncomingWowMessage};
+use bridge::{BridgeChannels, BridgeCommand, BridgeMessage};
 use config::{load_and_validate, env::get_config_path};
 use discord::{
     DiscordBotBuilder, DiscordChannels, WowCommand,
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     let outgoing_wow_tx = game_channels.outgoing_wow_tx.clone();
 
     // WoW -> Discord forwarding channel
-    let (wow_to_discord_tx, wow_to_discord_rx) = mpsc::unbounded_channel::<IncomingWowMessage>();
+    let (wow_to_discord_tx, wow_to_discord_rx) = mpsc::unbounded_channel::<BridgeMessage>();
 
     // Discord commands channel
     let (discord_command_tx, mut discord_command_rx) = mpsc::unbounded_channel::<WowCommand>();
@@ -95,14 +95,13 @@ async fn main() -> Result<()> {
     // Spawn forwarding tasks
     // ============================================================
 
-    // Task 1: Game -> Discord (convert WowMessage to IncomingWowMessage)
+    // Task 1: Game -> Discord forwarding
     let forward_to_discord = {
         let mut game_rx = wow_rx;
         let discord_tx = wow_to_discord_tx;
         tokio::spawn(async move {
             while let Some(msg) = game_rx.recv().await {
-                let incoming: IncomingWowMessage = msg.into();
-                if let Err(e) = discord_tx.send(incoming) {
+                if let Err(e) = discord_tx.send(msg) {
                     error!("Failed to forward message to Discord: {}", e);
                     break;
                 }

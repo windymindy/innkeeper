@@ -10,4 +10,4 @@ pub mod resolver;
 
 // Re-export main types for external use
 pub use client::{send_command_response, DiscordBotBuilder, DiscordChannels};
-pub use commands::{CommandResponse, WowCommand};
+pub use commands::WowCommand;

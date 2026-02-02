@@ -11,10 +11,10 @@ use serenity::model::gateway::Ready;
 use serenity::model::guild::Guild;
 use serenity::prelude::*;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState};
-use crate::common::{DiscordMessage, IncomingWowMessage};
+use crate::common::{BridgeMessage, DiscordMessage};
 use crate::discord::commands::{CommandHandler, WowCommand};
 
 // Re-export BridgeState's TypeMapKey implementation for Discord's context system
@@ -30,14 +30,14 @@ impl TypeMapKey for Bridge {
 /// Discord event handler.
 pub struct BridgeHandler {
     /// Receiver for WoW -> Discord messages.
-    wow_rx: Arc<Mutex<mpsc::UnboundedReceiver<IncomingWowMessage>>>,
+    wow_rx: Arc<Mutex<mpsc::UnboundedReceiver<BridgeMessage>>>,
     /// Command handler.
     command_handler: CommandHandler,
 }
 
 impl BridgeHandler {
     pub fn new(
-        wow_rx: mpsc::UnboundedReceiver<IncomingWowMessage>,
+        wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
     ) -> Self {
         Self {

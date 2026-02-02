@@ -1,12 +1,11 @@
-//! Game logic and message routing.
+//! Game logic and World of Warcraft client.
 //!
 //! This module contains:
 //! - Message formatting with placeholder substitution
-//! - Channel routing between WoW and Discord
+//! - Game client implementation
 
 pub mod client;
 pub mod formatter;
-pub mod router;
 
 // Re-export commonly used types
 pub use client::GameClient;

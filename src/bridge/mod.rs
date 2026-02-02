@@ -17,9 +17,8 @@ pub mod state;
 
 // Re-export main types for convenience
 pub use channels::BridgeChannels;
-pub use filter::{FilterDirection, MessageFilter};
 pub use orchestrator::Bridge;
 pub use state::{BridgeState, ChannelConfig};
 
 // Re-export message types from common for backwards compatibility
-pub use crate::common::{BridgeCommand, IncomingWowMessage, OutgoingWowMessage, WowMessage};
+pub use crate::common::{BridgeCommand, BridgeMessage};
