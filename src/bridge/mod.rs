@@ -11,11 +11,13 @@
 //! - `state`: Shared bridge state (`BridgeState`, `ChannelConfig`)
 
 pub mod channels;
+pub mod filter;
 pub mod orchestrator;
 pub mod state;
 
 // Re-export main types for convenience
 pub use channels::BridgeChannels;
+pub use filter::{FilterDirection, MessageFilter};
 pub use orchestrator::Bridge;
 pub use state::{BridgeState, ChannelConfig};
 

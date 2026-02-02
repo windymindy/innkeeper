@@ -1,12 +1,10 @@
 //! Game logic and message routing.
 //!
 //! This module contains:
-//! - Message filtering with regex patterns
 //! - Message formatting with placeholder substitution
 //! - Channel routing between WoW and Discord
 
 pub mod client;
-pub mod filter;
 pub mod formatter;
 pub mod router;
 

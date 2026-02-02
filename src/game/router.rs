@@ -6,8 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::common::types::ChatType;
-use crate::config::types::{ChatConfig, FiltersConfig, WowChannelConfig};
-use crate::game::filter::MessageFilter;
+use crate::config::types::{ChatConfig, WowChannelConfig};
 
 /// Direction of message flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,37 +60,6 @@ pub fn parse_channel_config(config: &WowChannelConfig) -> (ChatType, Option<Stri
     }
 }
 
-/// Build a MessageFilter for a route by merging WoW and Discord filter configs.
-///
-/// Priority order (first non-None wins):
-/// 1. Discord channel filters (highest priority - can filter both directions)
-/// 2. WoW channel filters
-/// 3. Empty filter (no filtering)
-fn build_route_filter(
-    wow_filters: &Option<FiltersConfig>,
-    discord_filters: &Option<FiltersConfig>,
-) -> MessageFilter {
-    // Discord filters take priority and apply to both directions
-    if let Some(discord_filter) = discord_filters {
-        if discord_filter.enabled {
-            return MessageFilter::new(
-                discord_filter.patterns.clone(),
-                discord_filter.patterns.clone(),
-            );
-        }
-    }
-
-    // WoW filters apply to WoW -> Discord only
-    if let Some(wow_filter) = wow_filters {
-        if wow_filter.enabled {
-            return MessageFilter::new(wow_filter.patterns.clone(), None);
-        }
-    }
-
-    // No filtering
-    MessageFilter::empty()
-}
-
 /// A configured route between WoW and Discord channels.
 #[derive(Debug, Clone)]
 pub struct Route {
@@ -107,8 +75,6 @@ pub struct Route {
     pub wow_to_discord_format: Option<String>,
     /// Format string for messages from Discord (WoW side).
     pub discord_to_wow_format: Option<String>,
-    /// Per-channel message filter for this route.
-    pub filter: MessageFilter,
 }
 
 /// Message router that handles channel mappings.
@@ -149,9 +115,6 @@ impl MessageRouter {
         for mapping in &config.channels {
             let (chat_type, wow_channel_name) = parse_channel_config(&mapping.wow);
 
-            // Build per-channel filter by merging WoW and Discord filter configs
-            let filter = build_route_filter(&mapping.wow.filters, &mapping.discord.filters);
-
             let route = Route {
                 chat_type,
                 wow_channel_name: wow_channel_name.clone(),
@@ -159,7 +122,6 @@ impl MessageRouter {
                 direction: Direction::from_str(&mapping.direction),
                 wow_to_discord_format: mapping.wow.format.clone(),
                 discord_to_wow_format: mapping.discord.format.clone(),
-                filter,
             };
 
             let idx = routes.len();
@@ -491,116 +453,5 @@ mod tests {
         let targets = router.get_discord_targets(chat_events::CHAT_MSG_GUILD, None);
 
         assert_eq!(targets.len(), 2);
-    }
-
-    #[test]
-    fn test_per_channel_filter_wow_to_discord() {
-        use crate::config::types::FiltersConfig;
-
-        let config = make_config(vec![ChannelMapping {
-            direction: "wow_to_discord".to_string(),
-            wow: WowChannelConfig {
-                channel_type: "Guild".to_string(),
-                channel: None,
-                format: None,
-                filters: Some(FiltersConfig {
-                    enabled: true,
-                    patterns: Some(vec!["spam".to_string()]),
-                }),
-            },
-            discord: DiscordChannelConfig {
-                channel: "guild-chat".to_string(),
-                format: None,
-                filters: None,
-            },
-        }]);
-
-        let router = MessageRouter::from_config(&config);
-        let targets = router.get_discord_targets(chat_events::CHAT_MSG_GUILD, None);
-
-        assert_eq!(targets.len(), 1);
-        let route = &targets[0];
-
-        // Filter should block spam messages
-        assert!(route.filter.should_filter_wow_to_discord("This is spam"));
-        assert!(!route
-            .filter
-            .should_filter_wow_to_discord("This is a normal message"));
-    }
-
-    #[test]
-    fn test_per_channel_filter_discord_priority() {
-        use crate::config::types::FiltersConfig;
-
-        // Discord filters should take priority over WoW filters
-        let config = make_config(vec![ChannelMapping {
-            direction: "both".to_string(),
-            wow: WowChannelConfig {
-                channel_type: "Guild".to_string(),
-                channel: None,
-                format: None,
-                filters: Some(FiltersConfig {
-                    enabled: true,
-                    patterns: Some(vec!["wow_filter".to_string()]),
-                }),
-            },
-            discord: DiscordChannelConfig {
-                channel: "guild-chat".to_string(),
-                format: None,
-                filters: Some(FiltersConfig {
-                    enabled: true,
-                    patterns: Some(vec!["discord_filter".to_string()]),
-                }),
-            },
-        }]);
-
-        let router = MessageRouter::from_config(&config);
-        let targets = router.get_discord_targets(chat_events::CHAT_MSG_GUILD, None);
-
-        assert_eq!(targets.len(), 1);
-        let route = &targets[0];
-
-        // Discord filter should be active (blocks "discord_filter")
-        assert!(route
-            .filter
-            .should_filter_wow_to_discord("discord_filter message"));
-        // WoW filter should NOT be active (doesn't block "wow_filter")
-        assert!(!route
-            .filter
-            .should_filter_wow_to_discord("wow_filter message"));
-    }
-
-    #[test]
-    fn test_per_channel_filter_disabled() {
-        use crate::config::types::FiltersConfig;
-
-        let config = make_config(vec![ChannelMapping {
-            direction: "both".to_string(),
-            wow: WowChannelConfig {
-                channel_type: "Guild".to_string(),
-                channel: None,
-                format: None,
-                filters: Some(FiltersConfig {
-                    enabled: false, // Disabled
-                    patterns: Some(vec!["should_not_filter".to_string()]),
-                }),
-            },
-            discord: DiscordChannelConfig {
-                channel: "guild-chat".to_string(),
-                format: None,
-                filters: None,
-            },
-        }]);
-
-        let router = MessageRouter::from_config(&config);
-        let targets = router.get_discord_targets(chat_events::CHAT_MSG_GUILD, None);
-
-        assert_eq!(targets.len(), 1);
-        let route = &targets[0];
-
-        // No filtering should occur when disabled
-        assert!(!route
-            .filter
-            .should_filter_wow_to_discord("should_not_filter"));
     }
 }

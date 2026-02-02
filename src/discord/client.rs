@@ -13,10 +13,9 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use crate::bridge::{BridgeState, ChannelConfig};
+use crate::bridge::{Bridge, BridgeState, ChannelConfig};
 use crate::common::{IncomingWowMessage, OutgoingWowMessage};
 use crate::config::types::Config;
-use crate::game::filter::MessageFilter;
 use crate::game::router::parse_channel_config;
 
 use super::commands::WowCommand;
@@ -73,18 +72,22 @@ pub struct DiscordBotBuilder {
     token: String,
     config: Config,
     channels: DiscordChannels,
+    bridge: Arc<Bridge>,
 }
 
 impl DiscordBotBuilder {
     /// Create a new Discord bot builder.
-    pub fn new(token: String, config: Config, channels: DiscordChannels) -> Self {
+    pub fn new(token: String, config: Config, channels: DiscordChannels, bridge: Arc<Bridge>) -> Self {
         Self {
             token,
             config,
             channels,
+            bridge,
         }
     }
+}
 
+impl DiscordBotBuilder {
     /// Build the Discord bot.
     pub async fn build(self) -> anyhow::Result<DiscordBot> {
         // Build channel mappings from config
@@ -123,10 +126,6 @@ impl DiscordBotBuilder {
             wow_tx: self.channels.outgoing_wow_tx.clone(),
             command_tx: self.channels.command_tx.clone(),
             resolver: MessageResolver::new(),
-            filter: MessageFilter::new(
-                self.config.filters.as_ref().and_then(|f| f.patterns.clone()),
-                self.config.filters.as_ref().and_then(|f| f.patterns.clone()),
-            ),
             pending_channel_configs: pending_configs,
             enable_dot_commands: self.config.discord.enable_dot_commands,
             dot_commands_whitelist: self.config.discord.dot_commands_whitelist.clone(),
@@ -159,10 +158,11 @@ impl DiscordBotBuilder {
             .event_handler(handler)
             .await?;
 
-        // Store bridge state in client
+        // Store bridge state and bridge in client
         {
             let mut data = client.data.write().await;
             data.insert::<BridgeState>(shared_state.clone());
+            data.insert::<Bridge>(self.bridge.clone());
         }
 
         let http = client.http.clone();

@@ -12,7 +12,6 @@ use tokio::sync::mpsc;
 
 use crate::common::OutgoingWowMessage;
 use crate::discord::resolver::MessageResolver;
-use crate::game::filter::MessageFilter;
 
 /// Configuration for a channel mapping.
 #[derive(Debug, Clone)]
@@ -37,8 +36,6 @@ pub struct BridgeState {
     pub command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
     /// Message resolver.
     pub resolver: MessageResolver,
-    /// Message filter for filtering spam/unwanted messages.
-    pub filter: MessageFilter,
     /// Pending channel configs waiting for Discord channel ID resolution.
     /// Stored as (channel_name, direction, config) tuples.
     pub pending_channel_configs: Vec<(String, String, ChannelConfig)>,
@@ -55,7 +52,6 @@ impl BridgeState {
     pub fn new(
         wow_tx: mpsc::UnboundedSender<OutgoingWowMessage>,
         command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
-        filter: MessageFilter,
         enable_dot_commands: bool,
         dot_commands_whitelist: Option<Vec<String>>,
     ) -> Self {
@@ -65,7 +61,6 @@ impl BridgeState {
             wow_tx,
             command_tx,
             resolver: MessageResolver::new(),
-            filter,
             pending_channel_configs: Vec::new(),
             enable_dot_commands,
             dot_commands_whitelist,
@@ -186,9 +181,8 @@ mod tests {
     fn create_test_state() -> BridgeState {
         let (wow_tx, _) = mpsc::unbounded_channel();
         let (cmd_tx, _) = mpsc::unbounded_channel();
-        let filter = MessageFilter::empty();
 
-        BridgeState::new(wow_tx, cmd_tx, filter, true, None)
+        BridgeState::new(wow_tx, cmd_tx, true, None)
     }
 
     #[test]
@@ -205,10 +199,9 @@ mod tests {
     fn test_dot_command_whitelist() {
         let (wow_tx, _) = mpsc::unbounded_channel();
         let (cmd_tx, _) = mpsc::unbounded_channel();
-        let filter = MessageFilter::empty();
 
         let whitelist = Some(vec!["help".to_string(), "guild*".to_string()]);
-        let state = BridgeState::new(wow_tx, cmd_tx, filter, true, whitelist);
+        let state = BridgeState::new(wow_tx, cmd_tx, true, whitelist);
 
         assert!(state.should_send_dot_command_directly(".help"));
         assert!(state.should_send_dot_command_directly(".guild"));
@@ -221,9 +214,8 @@ mod tests {
     fn test_dot_command_disabled() {
         let (wow_tx, _) = mpsc::unbounded_channel();
         let (cmd_tx, _) = mpsc::unbounded_channel();
-        let filter = MessageFilter::empty();
 
-        let state = BridgeState::new(wow_tx, cmd_tx, filter, false, None);
+        let state = BridgeState::new(wow_tx, cmd_tx, false, None);
 
         assert!(!state.should_send_dot_command_directly(".help"));
         assert!(!state.should_send_dot_command_directly(".anything"));

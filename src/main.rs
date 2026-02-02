@@ -75,15 +75,17 @@ async fn main() -> Result<()> {
     let (discord_command_tx, mut discord_command_rx) = mpsc::unbounded_channel::<WowCommand>();
 
     // ============================================================
+    // Create bridge (for centralized message filtering and routing)
+    let bridge = Arc::new(game::Bridge::new(&config));
+
     // Create Discord bot
-    // ============================================================
     let discord_channels = DiscordChannels {
         outgoing_wow_tx: outgoing_wow_tx.clone(),
         wow_to_discord_rx,
         command_tx: discord_command_tx.clone(),
     };
 
-    let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels)
+    let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels, bridge.clone())
         .build()
         .await?;
 
@@ -164,7 +166,6 @@ async fn main() -> Result<()> {
     // ============================================================
     // Start game client
     // ============================================================
-    let bridge = Arc::new(game::Bridge::new(&config));
     let channels_to_join: Vec<String> = bridge
         .channels_to_join()
         .iter()

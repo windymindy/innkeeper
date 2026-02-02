@@ -13,13 +13,18 @@ use serenity::prelude::*;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::bridge::BridgeState;
-use crate::common::{IncomingWowMessage, OutgoingWowMessage};
+use crate::bridge::{Bridge, BridgeState};
+use crate::common::{DiscordMessage, IncomingWowMessage};
 use crate::discord::commands::{CommandHandler, WowCommand};
 
 // Re-export BridgeState's TypeMapKey implementation for Discord's context system
 impl TypeMapKey for BridgeState {
     type Value = Arc<RwLock<BridgeState>>;
+}
+
+// Store Bridge in context for access by handler
+impl TypeMapKey for Bridge {
+    type Value = Arc<Bridge>;
 }
 
 /// Discord event handler.
@@ -77,13 +82,12 @@ impl EventHandler for BridgeHandler {
             }
         }
 
-        // Process as a regular message
+        // Process as a regular message using the Bridge for filtering and routing
         let data = ctx.data.read().await;
-        if let Some(state) = data.get::<BridgeState>() {
-            let state = state.read().await;
+        if let Some(bridge) = data.get::<Bridge>() {
+            if let Some(state) = data.get::<BridgeState>() {
+                let state = state.read().await;
 
-            let channel_id = msg.channel_id;
-            if let Some(config) = state.discord_to_wow.get(&channel_id) {
                 // Get effective display name
                 let sender = msg
                     .member
@@ -100,44 +104,26 @@ impl EventHandler for BridgeHandler {
                     full_content.push_str(&attachment.url);
                 }
 
-                // Process the message for WoW
+                // Process the message (resolve emojis, mentions, etc.)
                 let processed = state.resolver.process_discord_to_wow(&full_content, &ctx.cache);
 
-                // Check if message should be filtered
-                if state.filter.should_filter_discord_to_wow(&processed) {
-                    info!("FILTERED Discord -> WoW: {}", processed);
-                    return;
-                }
-
-                // Check for dot commands passthrough
-                let is_dot_command = state.should_send_dot_command_directly(&processed);
-
-                // Format the message
-                let formatted = if is_dot_command {
-                    // Send dot commands as-is
-                    processed
-                } else {
-                    config
-                        .format_discord_to_wow
-                        .replace("%user", &sender)
-                        .replace("%message", &processed)
+                // Create DiscordMessage and use Bridge to process, filter, and format
+                let discord_msg = DiscordMessage {
+                    sender: sender.clone(),
+                    content: processed,
+                    channel_id: msg.channel_id.get(),
+                    channel_name: state
+                        .discord_to_wow
+                        .get(&msg.channel_id)
+                        .map(|c| c.discord_channel_name.clone())
+                        .unwrap_or_default(),
                 };
 
-                info!(
-                    "Discord -> WoW [{}]: {}",
-                    config.wow_channel_name.as_deref().unwrap_or("guild"),
-                    formatted
-                );
-
-                let outgoing = OutgoingWowMessage {
-                    chat_type: config.wow_chat_type,
-                    channel_name: config.wow_channel_name.clone(),
-                    sender,
-                    content: formatted,
-                };
-
-                if let Err(e) = state.wow_tx.send(outgoing) {
-                    error!("Failed to send message to WoW: {}", e);
+                let outgoing = bridge.handle_discord_to_wow(&discord_msg);
+                for msg in outgoing {
+                    if let Err(e) = state.wow_tx.send(msg) {
+                        error!("Failed to send message to WoW: {}", e);
+                    }
                 }
             }
         }
@@ -161,7 +147,6 @@ impl EventHandler for BridgeHandler {
         // Start WoW -> Discord forwarding task
         let wow_rx = Arc::clone(&self.wow_rx);
         let http = ctx.http.clone();
-        let cache = ctx.cache.clone();
         let data = ctx.data.clone();
 
         tokio::spawn(async move {
@@ -169,51 +154,39 @@ impl EventHandler for BridgeHandler {
 
             while let Some(msg) = rx.recv().await {
                 let data = data.read().await;
-                if let Some(state) = data.get::<BridgeState>() {
-                    let state = state.read().await;
+                if let Some(bridge) = data.get::<Bridge>() {
+                    if let Some(state) = data.get::<BridgeState>() {
+                        let state = state.read().await;
 
-                    let key = (
-                        msg.chat_type,
-                        msg.channel_name.as_ref().map(|s| s.to_lowercase()),
-                    );
+                        // Process and filter message through Bridge
+                        let results = bridge.handle_wow_to_discord(
+                            msg.chat_type,
+                            msg.channel_name.as_deref(),
+                            msg.sender.as_deref(),
+                            &msg.content,
+                        );
 
-                    if let Some(configs) = state.wow_to_discord.get(&key) {
-                        for config in configs {
-                            // Process the message
-                            let processed = state.resolver.process_wow_to_discord(&cache, &msg.content);
-
-                            // Format the message
-                            let formatted = config
-                                .format_wow_to_discord
-                                .replace("%user", msg.sender.as_deref().unwrap_or(""))
-                                .replace("%message", &processed)
-                                .replace("%target", msg.channel_name.as_deref().unwrap_or(""));
-
-                            // Send to Discord
-                            if let Some(channel_id) = config.discord_channel_id {
-                                match channel_id.say(&http, &formatted).await {
-                                    Ok(_) => {
-                                        info!(
-                                            "WoW -> Discord [{}]: {}",
-                                            config.discord_channel_name, formatted
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            "Failed to send to Discord channel {}: {}",
-                                            config.discord_channel_name, e
-                                        );
+                        // Send filtered messages to appropriate Discord channels
+                        for (discord_channel_name, formatted) in results {
+                            // Find the Discord channel ID from state
+                            if let Some(channel_configs) = state.wow_to_discord.get(&(
+                                msg.chat_type,
+                                msg.channel_name.as_ref().map(|s| s.to_lowercase()),
+                            )) {
+                                for config in channel_configs {
+                                    if config.discord_channel_name == discord_channel_name {
+                                        if let Some(channel_id) = config.discord_channel_id {
+                                            match channel_id.say(&http, &formatted).await {
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    error!("Failed to send to Discord channel {}: {}", discord_channel_name, e);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                            } else {
-                                warn!("Discord channel ID not resolved for {}", config.discord_channel_name);
                             }
                         }
-                    } else {
-                        debug!(
-                            "No Discord channel mapping for WoW chat type {} channel {:?}",
-                            msg.chat_type, msg.channel_name
-                        );
                     }
                 }
             }

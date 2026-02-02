@@ -1,10 +1,19 @@
 //! Message filtering with regex patterns.
 //!
 //! Filters messages based on configurable regex patterns to prevent
-//! spam or unwanted messages from being relayed.
+//! spam or unwanted messages from being relayed between Discord and WoW.
 
 use fancy_regex::Regex;
 use tracing::warn;
+
+/// Direction of message flow for filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterDirection {
+    /// WoW to Discord.
+    WowToDiscord,
+    /// Discord to WoW.
+    DiscordToWow,
+}
 
 /// Message filter that checks messages against regex patterns.
 #[derive(Debug, Clone)]
@@ -41,22 +50,15 @@ impl MessageFilter {
         }
     }
 
-    /// Check if a WoW -> Discord message should be filtered (blocked).
+    /// Check if a message should be filtered (blocked) for the given direction.
     ///
     /// Returns `true` if the message matches any filter pattern and should be blocked.
-    pub fn should_filter_wow_to_discord(&self, message: &str) -> bool {
-        self.matches_any(&self.wow_to_discord_patterns, message)
-    }
+    pub fn should_filter(&self, direction: FilterDirection, message: &str) -> bool {
+        let patterns = match direction {
+            FilterDirection::WowToDiscord => &self.wow_to_discord_patterns,
+            FilterDirection::DiscordToWow => &self.discord_to_wow_patterns,
+        };
 
-    /// Check if a Discord -> WoW message should be filtered (blocked).
-    ///
-    /// Returns `true` if the message matches any filter pattern and should be blocked.
-    pub fn should_filter_discord_to_wow(&self, message: &str) -> bool {
-        self.matches_any(&self.discord_to_wow_patterns, message)
-    }
-
-    /// Check if message matches any of the given patterns.
-    fn matches_any(&self, patterns: &[CompiledPattern], message: &str) -> bool {
         patterns.iter().any(|p| {
             p.regex.is_match(message).unwrap_or_else(|e| {
                 warn!("Regex match error for pattern '{}': {}", p.original, e);
@@ -95,24 +97,24 @@ mod tests {
     #[test]
     fn test_empty_filter_allows_all() {
         let filter = MessageFilter::empty();
-        assert!(!filter.should_filter_wow_to_discord("any message"));
-        assert!(!filter.should_filter_discord_to_wow("any message"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "any message"));
+        assert!(!filter.should_filter(FilterDirection::DiscordToWow, "any message"));
     }
 
     #[test]
     fn test_exact_match_filter() {
         let filter = MessageFilter::new(Some(vec!["^spam$".to_string()]), None);
-        assert!(filter.should_filter_wow_to_discord("spam"));
-        assert!(!filter.should_filter_wow_to_discord("not spam"));
-        assert!(!filter.should_filter_wow_to_discord("spam message"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "spam"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "not spam"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "spam message"));
     }
 
     #[test]
     fn test_partial_match_filter() {
         let filter = MessageFilter::new(Some(vec!["gold.*sell".to_string()]), None);
-        assert!(filter.should_filter_wow_to_discord("Buy gold selling cheap!"));
-        assert!(filter.should_filter_wow_to_discord("gold sell"));
-        assert!(!filter.should_filter_wow_to_discord("I need gold"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "Buy gold selling cheap!"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "gold sell"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "I need gold"));
     }
 
     #[test]
@@ -125,17 +127,17 @@ mod tests {
             ]),
             None,
         );
-        assert!(filter.should_filter_wow_to_discord("this is spam"));
-        assert!(filter.should_filter_wow_to_discord("gold selling"));
-        assert!(filter.should_filter_wow_to_discord("visit www.scam.com"));
-        assert!(!filter.should_filter_wow_to_discord("hello world"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "this is spam"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "gold selling"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "visit www.scam.com"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "hello world"));
     }
 
     #[test]
     fn test_discord_to_wow_filter() {
         let filter = MessageFilter::new(None, Some(vec!["blocked".to_string()]));
-        assert!(!filter.should_filter_wow_to_discord("blocked"));
-        assert!(filter.should_filter_discord_to_wow("blocked"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "blocked"));
+        assert!(filter.should_filter(FilterDirection::DiscordToWow, "blocked"));
     }
 
     #[test]
@@ -148,7 +150,7 @@ mod tests {
             ]),
             None,
         );
-        assert!(filter.should_filter_wow_to_discord("valid pattern"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "valid pattern"));
         // Filter still works with valid patterns
     }
 
@@ -158,9 +160,9 @@ mod tests {
             Some(vec!["(?i)spam".to_string()]), // Case insensitive
             None,
         );
-        assert!(filter.should_filter_wow_to_discord("SPAM"));
-        assert!(filter.should_filter_wow_to_discord("Spam"));
-        assert!(filter.should_filter_wow_to_discord("spam"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "SPAM"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "Spam"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "spam"));
     }
 
     #[test]
@@ -168,8 +170,8 @@ mod tests {
         // Pattern that matches "wtb" followed by "dp" but NOT if "wts" appears before "dp"
         let filter = MessageFilter::new(Some(vec!["(?i).*wtb(((?!wts).)*)dp.*".to_string()]), None);
         // Should match: wtb with dp, no wts
-        assert!(filter.should_filter_wow_to_discord("wtb any dp"));
+        assert!(filter.should_filter(FilterDirection::WowToDiscord, "wtb any dp"));
         // Should NOT match: has wts
-        assert!(!filter.should_filter_wow_to_discord("wtb wts dp"));
+        assert!(!filter.should_filter(FilterDirection::WowToDiscord, "wtb wts dp"));
     }
 }
