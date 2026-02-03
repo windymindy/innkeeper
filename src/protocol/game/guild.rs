@@ -310,64 +310,6 @@ impl GuildEventPacket {
             None
         }
     }
-
-    /// Format the event as a notification message.
-    pub fn format_notification(&self) -> Option<String> {
-        let event = self.to_guild_event()?;
-        let strings = &self.strings;
-
-        if strings.is_empty() {
-            return None;
-        }
-
-        Some(match event {
-            GuildEvent::Promotion => {
-                if strings.len() >= 3 {
-                    format!(
-                        "{} has promoted {} to {}",
-                        strings[0], strings[1], strings[2]
-                    )
-                } else {
-                    return None;
-                }
-            }
-            GuildEvent::Demotion => {
-                if strings.len() >= 3 {
-                    format!(
-                        "{} has demoted {} to {}",
-                        strings[0], strings[1], strings[2]
-                    )
-                } else {
-                    return None;
-                }
-            }
-            GuildEvent::Motd => {
-                format!("Guild MOTD: {}", strings[0])
-            }
-            GuildEvent::Joined => {
-                format!("{} has joined the guild", strings[0])
-            }
-            GuildEvent::Left => {
-                format!("{} has left the guild", strings[0])
-            }
-            GuildEvent::Removed => {
-                if strings.len() >= 2 {
-                    format!(
-                        "{} has been kicked from the guild by {}",
-                        strings[0], strings[1]
-                    )
-                } else {
-                    format!("{} has been removed from the guild", strings[0])
-                }
-            }
-            GuildEvent::SignedOn => {
-                format!("{} has come online", strings[0])
-            }
-            GuildEvent::SignedOff => {
-                format!("{} has gone offline", strings[0])
-            }
-        })
-    }
 }
 
 impl PacketDecode for GuildEventPacket {
@@ -422,19 +364,5 @@ mod tests {
 
         assert_eq!(buf.len(), 4);
         assert_eq!(buf[0..4], 12345u32.to_le_bytes());
-    }
-
-    #[test]
-    fn test_guild_event_format() {
-        let event = GuildEventPacket {
-            event_type: guild_events::GE_JOINED,
-            strings: vec!["TestPlayer".to_string()],
-        };
-
-        let formatted = event.format_notification();
-        assert_eq!(
-            formatted,
-            Some("TestPlayer has joined the guild".to_string())
-        );
     }
 }

@@ -173,6 +173,7 @@ impl EventHandler for BridgeHandler {
                             msg.sender.as_deref(),
                             &processed_content,
                             msg.format.as_deref(),
+                            msg.guild_event.as_deref(),
                         );
 
                         // Send filtered messages to appropriate Discord channels
@@ -227,6 +228,7 @@ impl EventHandler for BridgeHandler {
                                                             chat_type: 7, // CHAT_MSG_WHISPER
                                                             channel_name: Some(sender.clone()),
                                                             format: None,
+                                                            guild_event: None,
                                                         };
                                                         if let Err(e) = state.wow_tx.send(whisper_msg) {
                                                             warn!("Failed to send tag error whisper to WoW: {}", e);

@@ -141,4 +141,19 @@ impl GuildEvent {
             _ => None,
         }
     }
+
+    /// Returns the config key name for this event type.
+    /// Used to look up event configuration (enabled, format).
+    pub fn config_name(&self) -> &'static str {
+        match self {
+            Self::SignedOn => "online",
+            Self::SignedOff => "offline",
+            Self::Promotion => "promoted",
+            Self::Demotion => "demoted",
+            Self::Joined => "joined",
+            Self::Left => "left",
+            Self::Removed => "removed",
+            Self::Motd => "motd",
+        }
+    }
 }

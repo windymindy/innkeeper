@@ -18,6 +18,8 @@ pub struct BridgeMessage {
     pub channel_name: Option<String>,
     /// Optional custom format override (mainly used internally by bridge).
     pub format: Option<String>,
+    /// Guild event type for filtering (e.g., "online", "offline", "joined", etc.)
+    pub guild_event: Option<String>,
 }
 
 /// Message from Discord to be processed by the bridge.

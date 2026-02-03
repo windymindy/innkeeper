@@ -19,12 +19,12 @@ use super::filter::{FilterDirection, MessageFilter};
 pub struct Bridge {
     /// Message router.
     router: SharedRouter,
-    /// Whether dot commands are enabled.
-    enable_dot_commands: bool,
     /// Global message filter (applied to all messages).
     global_filter: MessageFilter,
     /// Per-channel filters keyed by Discord channel name.
     per_channel_filters: HashMap<String, MessageFilter>,
+    /// Configuration (accessed for feature flags like enable_dot_commands and guild events).
+    config: Config,
 }
 
 impl Bridge {
@@ -36,8 +36,6 @@ impl Bridge {
             Arc::new(MessageRouter::from_config(&config.chat))
         };
 
-        let enable_dot_commands = config.discord.enable_dot_commands;
-
         // Build global filter from config
         let global_filter = build_global_filter(config.filters.as_ref());
 
@@ -46,9 +44,9 @@ impl Bridge {
 
         Self {
             router,
-            enable_dot_commands,
             global_filter,
             per_channel_filters,
+            config: config.clone(),
         }
     }
 
@@ -81,7 +79,8 @@ impl Bridge {
 
         for route in routes {
             // Check for dot commands: messages starting with "." that should be sent directly
-            let is_dot_command = self.enable_dot_commands && msg.content.starts_with('.');
+            let is_dot_command =
+                self.config.discord.enable_dot_commands && msg.content.starts_with('.');
 
             if is_dot_command {
                 // Send the content directly without formatting
@@ -91,6 +90,7 @@ impl Bridge {
                     sender: Some(msg.sender.clone()),
                     content: msg.content.clone(),
                     format: None,
+                    guild_event: None,
                 });
                 continue;
             }
@@ -172,6 +172,7 @@ impl Bridge {
                     sender: Some(msg.sender.clone()),
                     content: formatted,
                     format: None,
+                    guild_event: None,
                 });
             }
         }
@@ -235,7 +236,19 @@ impl Bridge {
         sender: Option<&str>,
         content: &str,
         format_override: Option<&str>,
+        guild_event: Option<&str>,
     ) -> Vec<(String, String)> {
+        // Check if this is a guild event and if it's enabled
+        if let Some(event_name) = guild_event {
+            if !self.config.is_guild_event_enabled(event_name) {
+                debug!(
+                    "Guild event '{}' is disabled in config, not sending to Discord",
+                    event_name
+                );
+                return Vec::new();
+            }
+        }
+
         let routes = self.router.get_discord_targets(chat_type, channel_name);
 
         if routes.is_empty() {
@@ -247,8 +260,17 @@ impl Bridge {
 
         for route in routes {
             // Get format (use override if provided, otherwise use config or default)
+            // For guild events, look up format from guild event config
             let format = format_override
                 .map(String::from)
+                .or_else(|| {
+                    // If this is a guild event, get format from guild event config
+                    if let Some(event_name) = guild_event {
+                        self.config.get_guild_event_format(event_name)
+                    } else {
+                        None
+                    }
+                })
                 .or_else(|| route.wow_to_discord_format.clone())
                 .unwrap_or_else(|| "[%user]: %message".to_string());
 
@@ -847,7 +869,7 @@ mod tests {
         let config = make_test_config();
         let bridge = Bridge::new(&config);
 
-        assert!(bridge.enable_dot_commands);
+        assert!(bridge.config.discord.enable_dot_commands);
         assert!(bridge.channels_to_join().is_empty()); // "guild" is not a custom channel
     }
 

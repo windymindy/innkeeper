@@ -6,7 +6,7 @@ use bytes::Bytes;
 use sha1::{Digest, Sha1};
 use tracing::{debug, error, info, warn};
 
-use crate::common::types::{ChatMessage, GuildInfo, GuildMember, Player};
+use crate::common::types::{ChatMessage, GuildEvent, GuildInfo, GuildMember, Player};
 use crate::protocol::game::chat::{
     get_language_for_race, ChannelNotify, ChatPlayerNotFound, JoinChannelWotLK, MessageChat,
     NameQuery, NameQueryResponse, SendChatMessage,
@@ -321,13 +321,20 @@ impl GameHandler {
     }
 
     /// Handle SMSG_GUILD_EVENT.
-    pub fn handle_guild_event(&mut self, mut payload: Bytes) -> Result<Option<String>> {
+    /// Returns (player_name, event_name) if this is a trackable guild event.
+    pub fn handle_guild_event(&mut self, mut payload: Bytes) -> Result<Option<(String, String)>> {
         let event = GuildEventPacket::decode(&mut payload)?;
+
+        // Get player name
+        let player_name = event.player_name().map(|s| s.to_string());
+
+        // Convert event type to GuildEvent enum
+        let guild_event = GuildEvent::from_id(event.event_type);
 
         // Skip events from self (except MOTD)
         if event.event_type != crate::protocol::game::guild::guild_events::GE_MOTD {
             if let Some(player) = &self.player {
-                if let Some(name) = event.player_name() {
+                if let Some(ref name) = player_name {
                     if name.eq_ignore_ascii_case(&player.name) {
                         return Ok(None);
                     }
@@ -340,13 +347,13 @@ impl GameHandler {
             self.guild_motd = Some(motd.to_string());
         }
 
-        // Format notification
-        let notification = event.format_notification();
-        if let Some(ref msg) = notification {
-            debug!("Guild event: {}", msg);
-        }
+        // Get config name from GuildEvent enum
+        let event_name = guild_event.map(|e| e.config_name().to_string());
 
-        Ok(notification)
+        match (player_name, event_name) {
+            (Some(name), Some(event)) => Ok(Some((name, event))),
+            _ => Ok(None),
+        }
     }
 
     /// Build CMSG_GUILD_QUERY packet.
