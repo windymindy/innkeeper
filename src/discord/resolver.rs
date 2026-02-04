@@ -3,6 +3,7 @@
 //! Handles translation between WoW item links and Discord-friendly formats,
 //! emoji resolution, and @mention handling.
 
+use emojis;
 use fancy_regex::Regex;
 use serenity::cache::Cache;
 use serenity::model::id::ChannelId;
@@ -134,12 +135,10 @@ impl MessageResolver {
     /// Resolve custom Discord emojis in message.
     ///
     /// Converts :emoji_name: to <:emoji_name:emoji_id> for custom server emojis.
+    /// Also resolves standard emojis like :smile: to 😀 if possible (optional but good for consistency).
     pub fn resolve_emojis(&self, cache: &Cache, message: &str) -> String {
-        static EMOJI_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let pattern = EMOJI_PATTERN.get_or_init(|| Regex::new(r":([a-zA-Z0-9_]+):").unwrap());
-
         // Build emoji map from cache
-        let emoji_map: std::collections::HashMap<String, String> = cache
+        let custom_emoji_map: std::collections::HashMap<String, String> = cache
             .guilds()
             .iter()
             .filter_map(|guild_id| cache.guild(*guild_id))
@@ -157,15 +156,66 @@ impl MessageResolver {
             })
             .collect();
 
-        pattern
-            .replace_all(message, |caps: &fancy_regex::Captures| -> String {
-                let name = caps[1].to_lowercase();
-                emoji_map
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or_else(|| caps[0].to_string())
-            })
-            .to_string()
+        let mut result = String::with_capacity(message.len() * 2);
+        let mut chars = message.char_indices().peekable();
+
+        while let Some((_idx, ch)) = chars.next() {
+            if ch == ':' {
+                // Potential start of emoji
+                let mut end_idx = None;
+                let mut shortcode = String::new();
+
+                // Scan ahead
+                while let Some(&(next_idx, next_ch)) = chars.peek() {
+                    if next_ch == ':' {
+                        end_idx = Some(next_idx);
+                        chars.next(); // Consume closing colon
+                        break;
+                    } else if next_ch.is_alphanumeric()
+                        || next_ch == '_'
+                        || next_ch == '-'
+                        || next_ch == '+'
+                    {
+                        shortcode.push(next_ch);
+                        chars.next(); // Consume char
+                    } else {
+                        // Invalid char for shortcode, abort this emoji
+                        break;
+                    }
+                }
+
+                if let Some(_end) = end_idx {
+                    if !shortcode.is_empty() {
+                        let lower_shortcode = shortcode.to_lowercase();
+
+                        // Check custom emojis first
+                        if let Some(replacement) = custom_emoji_map.get(&lower_shortcode) {
+                            result.push_str(replacement);
+                        }
+                        // Then check standard emojis
+                        else if let Some(emoji) = emojis::get_by_shortcode(&lower_shortcode) {
+                            result.push_str(emoji.as_str());
+                        } else {
+                            // Not found, keep original
+                            result.push(':');
+                            result.push_str(&shortcode);
+                            result.push(':');
+                        }
+                    } else {
+                        // Empty ::
+                        result.push_str("::");
+                    }
+                } else {
+                    // Incomplete or invalid, just push what we scanned
+                    result.push(':');
+                    result.push_str(&shortcode);
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+
+        result
     }
 
     /// Escape Discord markdown special characters.
@@ -252,13 +302,53 @@ impl MessageResolver {
         pattern.replace_all(message, ":$1:").to_string()
     }
 
+    /// Convert Unicode emojis to text aliases (e.g., 😀 -> :grinning:).
+    ///
+    /// Uses shortcode if available (like :joy:, :thumbsup:), otherwise falls back to name.
+    pub fn resolve_unicode_emojis_to_text(&self, message: &str) -> String {
+        let mut result = String::with_capacity(message.len() * 2);
+        let mut chars = message.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            // Try single character emoji first
+            if let Some(emoji) = emojis::get(ch.to_string().as_str()) {
+                let alias = emoji.shortcode().unwrap_or_else(|| emoji.name());
+                result.push(':');
+                result.push_str(alias);
+                result.push(':');
+            } else if ch.is_ascii() {
+                result.push(ch);
+            } else {
+                // Try with next character for multi-byte emojis
+                let mut grapheme = ch.to_string();
+                if let Some(&next) = chars.peek() {
+                    if !next.is_ascii() {
+                        grapheme.push(chars.next().unwrap());
+                    }
+                }
+
+                if let Some(emoji) = emojis::get(grapheme.as_str()) {
+                    let alias = emoji.shortcode().unwrap_or_else(|| emoji.name());
+                    result.push(':');
+                    result.push_str(alias);
+                    result.push(':');
+                } else {
+                    result.push_str(&grapheme);
+                }
+            }
+        }
+
+        result
+    }
+
     /// Process a message from Discord for WoW.
     pub fn process_discord_to_wow(&self, message: &str, cache: &Cache) -> String {
-        let step1 = self.resolve_mentions_to_text(message, cache);
-        let step2 = self.resolve_channel_mentions(&step1, cache);
-        let step3 = self.resolve_role_mentions(&step2, cache);
-        let step4 = self.resolve_custom_emojis_to_text(&step3);
-        step4
+        let step1 = self.resolve_unicode_emojis_to_text(message);
+        let step2 = self.resolve_mentions_to_text(&step1, cache);
+        let step3 = self.resolve_channel_mentions(&step2, cache);
+        let step4 = self.resolve_role_mentions(&step3, cache);
+        let step5 = self.resolve_custom_emojis_to_text(&step4);
+        step5
     }
 
     /// Pre-process WoW message content before Bridge formatting.
@@ -677,6 +767,53 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_unicode_emojis() {
+        let resolver = MessageResolver::new();
+
+        // Basic emoji conversion (😀 = grinning face)
+        let input = "Hello 😀 world";
+        let output = resolver.resolve_unicode_emojis_to_text(input);
+        assert!(
+            output.contains("grinning"),
+            "Expected emoji name with 'grinning' in output, got: {}",
+            output
+        );
+
+        // Multiple emojis
+        let input2 = "😀😂👍";
+        let output2 = resolver.resolve_unicode_emojis_to_text(input2);
+        assert!(
+            output2.contains("grinning"),
+            "Expected :grinning, got: {}",
+            output2
+        );
+        assert!(
+            output2.contains("joy"),
+            "Expected :joy emoji, got: {}",
+            output2
+        );
+        assert!(
+            output2.contains("+1"),
+            "Expected :+1: (thumbs up), got: {}",
+            output2
+        );
+
+        // Mixed text with emojis
+        let input3 = "Hey there 🎉 party 🎊 time!";
+        let output3 = resolver.resolve_unicode_emojis_to_text(input3);
+        assert!(
+            output3.contains("tada"),
+            "Expected :tada: (party popper), got: {}",
+            output3
+        );
+        assert!(
+            output3.contains("Hey there"),
+            "Original text should be preserved, got: {}",
+            output3
+        );
+    }
+
+    #[test]
     fn test_resolve_achievement_id() {
         let resolver = MessageResolver::new();
 
@@ -772,5 +909,13 @@ mod tests {
         // Check for known achievement
         assert!(achievements.contains_key(&6)); // Level 10
         assert_eq!(achievements.get(&6), Some(&"Level 10".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_emojis_standard_direct() {
+        // Verify direct shortcode lookup works
+        assert_eq!(emojis::get_by_shortcode("smile").unwrap().as_str(), "😄");
+        assert_eq!(emojis::get_by_shortcode("grinning").unwrap().as_str(), "😀");
+        assert_eq!(emojis::get_by_shortcode("+1").unwrap().as_str(), "👍");
     }
 }
