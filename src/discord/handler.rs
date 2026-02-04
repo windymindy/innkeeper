@@ -70,13 +70,54 @@ impl EventHandler for BridgeHandler {
             return;
         }
 
-        // Check for commands first
-        if content.starts_with('!') {
-            match self.command_handler.handle_command(&ctx, &msg, content).await {
-                Ok(true) => return, // Command was handled
-                Ok(false) => {} // Not a known command, continue
-                Err(e) => {
-                    error!("Command handler error: {}", e);
+        // Check for !commands first
+        if content.len() <= 100 && (content.starts_with('!') || content.starts_with('?'))  {
+            // Check if commands are enabled for this channel
+            let should_handle = {
+                let data = ctx.data.read().await;
+                if let Some(state) = data.get::<BridgeState>() {
+                    let state = state.read().await;
+                    let channel_name = msg.channel_id.name(&ctx).await.unwrap_or_default();
+                    state.command_allowed_in_channel(&channel_name, msg.channel_id.get())
+                } else {
+                    false
+                }
+            };
+            if should_handle {
+                match self.command_handler.handle_command(&ctx, &msg, content).await {
+                    Ok(true) => return, // Command was handled
+                    Ok(false) => {} // Not a known command, continue
+                    Err(e) => {
+                        error!("Command handler error: {}", e);
+                        return;
+                    }
+                }
+            }
+            // If commands not enabled for this channel, fall through to regular message handling
+        }
+
+        if content.len() <= 100 && content.starts_with('.')  {
+            let data = ctx.data.read().await;
+            if let Some(state) = data.get::<BridgeState>() {
+                let state = state.read().await;
+                let channel_name = msg.channel_id.name(&ctx).await.unwrap_or_default();
+                let should_send_directly = state.should_send_dot_command_directly(content)
+                    && state.command_allowed_in_channel(&channel_name, msg.channel_id.get());
+                if should_send_directly {
+                    if let Some(bridge) = data.get::<Bridge>() {
+                        let discord_msg = DiscordMessage {
+                            sender: "".to_string(),
+                            content: content.to_string(),
+                            channel_id: msg.channel_id.get(),
+                            channel_name: "".to_string(),
+                        };
+                        let outgoing = bridge.handle_discord_to_wow_directly(&discord_msg);
+                        if let Some(msg) = outgoing {
+                            if let Err(e) = state.wow_tx.send(msg) {
+                                error!("Failed to send message to WoW: {}", e);
+                            }
+                        }
+                    }
                     return;
                 }
             }

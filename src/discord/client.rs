@@ -131,6 +131,7 @@ impl DiscordBotBuilder {
             pending_channel_configs: pending_configs,
             enable_dot_commands: self.config.discord.enable_dot_commands,
             dot_commands_whitelist: self.config.discord.dot_commands_whitelist.clone(),
+            enable_commands_channels: self.config.discord.enable_commands_channels.clone(),
             http: None,
             self_user_id: None,
             enable_tag_failed_notifications: self.config.discord.enable_tag_failed_notifications,

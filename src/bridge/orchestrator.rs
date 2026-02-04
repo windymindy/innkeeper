@@ -60,6 +60,21 @@ impl Bridge {
         self.router.get_channels_to_join()
     }
 
+    /// Process a dot command message from Discord and prepare for WoW.
+    ///
+    /// Dot commands are sent directly without formatting to the first matching route.
+    /// Returns None if no route is found for the channel.
+    pub fn handle_discord_to_wow_directly(&self, msg: &DiscordMessage) -> Option<BridgeMessage> {
+        Some(BridgeMessage {
+            chat_type: ChatType::Say.to_id(),
+            channel_name: None,
+            sender: None,
+            content: msg.content.clone(),
+            format: None,
+            guild_event: None,
+        })
+    }
+
     /// Process a message from Discord and prepare for WoW.
     ///
     /// Returns the messages to send to WoW, already formatted and split if needed.
@@ -78,23 +93,6 @@ impl Bridge {
         let mut results = Vec::new();
 
         for route in routes {
-            // Check for dot commands: messages starting with "." that should be sent directly
-            let is_dot_command =
-                self.config.discord.enable_dot_commands && msg.content.starts_with('.');
-
-            if is_dot_command {
-                // Send the content directly without formatting
-                results.push(BridgeMessage {
-                    chat_type: route.chat_type.to_id(),
-                    channel_name: route.wow_channel_name.clone(),
-                    sender: Some(msg.sender.clone()),
-                    content: msg.content.clone(),
-                    format: None,
-                    guild_event: None,
-                });
-                continue;
-            }
-
             // Preprocess message for whisper channels ("/w <target> <message>" syntax)
             let (processed_content, whisper_target) =
                 self.preprocess_whisper_message(&msg.content, route.chat_type);
@@ -902,9 +900,9 @@ mod tests {
             channel_name: "guild-chat".to_string(),
         };
 
-        let results = bridge.handle_discord_to_wow(&msg);
-        assert_eq!(results.len(), 1);
+        let result = bridge.handle_discord_to_wow_directly(&msg);
+        assert!(result.is_some());
         // Dot commands are sent directly without formatting
-        assert_eq!(results[0].content, ".help");
+        assert_eq!(result.unwrap().content, ".help");
     }
 }

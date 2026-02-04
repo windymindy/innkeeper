@@ -304,6 +304,56 @@ where
     deserializer.deserialize_any(OptionVecStringVisitor)
 }
 
+/// Deserialize an Option<Vec<String>> that accepts both strings and integers (like channel IDs).
+/// Converts integers to strings for uniform handling.
+fn option_vec_string_or_int<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    struct OptionVecStringOrIntVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for OptionVecStringOrIntVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("an array of strings, integers, or null")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut vec = Vec::new();
+            while let Some(value) = seq.next_element::<serde_json::Value>()? {
+                match value {
+                    serde_json::Value::String(s) => vec.push(s),
+                    serde_json::Value::Number(n) => vec.push(n.to_string()),
+                    _ => return Err(Error::custom("expected string or integer")),
+                }
+            }
+            Ok(Some(vec))
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: Error,
+        {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(OptionVecStringOrIntVisitor)
+}
+
 /// Deserialize an Option<T> for struct types that handles both Some(value) and None cases.
 fn option_struct<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -396,7 +446,8 @@ pub struct DiscordConfig {
     #[serde(default, deserialize_with = "option_vec_string")]
     pub dot_commands_whitelist: Option<Vec<String>>,
     /// Discord channels where commands are enabled (empty = all channels)
-    #[serde(default, deserialize_with = "option_vec_string")]
+    /// Can be channel names (strings) or channel IDs (integers)
+    #[serde(default, deserialize_with = "option_vec_string_or_int")]
     pub enable_commands_channels: Option<Vec<String>>,
     /// Notify on failed tag/mention resolution
     #[serde(default = "default_enabled", deserialize_with = "bool_or_int")]

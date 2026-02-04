@@ -43,6 +43,8 @@ pub struct BridgeState {
     pub enable_dot_commands: bool,
     /// Whitelist of allowed dot commands (None = all allowed if enabled).
     pub dot_commands_whitelist: Option<Vec<String>>,
+    /// Channels where commands are enabled (None = all channels).
+    pub enable_commands_channels: Option<Vec<String>>,
     /// HTTP client for Discord API calls.
     pub http: Option<std::sync::Arc<Http>>,
     /// Bot's user ID (set after connection).
@@ -68,6 +70,7 @@ impl BridgeState {
             pending_channel_configs: Vec::new(),
             enable_dot_commands,
             dot_commands_whitelist,
+            enable_commands_channels: None,
             http: None,
             self_user_id: None,
             enable_tag_failed_notifications: false,
@@ -91,6 +94,7 @@ impl BridgeState {
             pending_channel_configs: Vec::new(),
             enable_dot_commands,
             dot_commands_whitelist,
+            enable_commands_channels: None,
             http: None,
             self_user_id: None,
             enable_tag_failed_notifications,
@@ -181,6 +185,9 @@ impl BridgeState {
     /// Check if a dot command message should be sent directly to WoW (passthrough).
     /// Returns true if the command is allowed based on whitelist settings.
     pub fn should_send_dot_command_directly(&self, message: &str) -> bool {
+        if message.len() > 100 {
+            return false;
+        }
         if !self.enable_dot_commands || !message.starts_with('.') {
             return false;
         }
@@ -215,6 +222,24 @@ impl BridgeState {
         }
 
         false
+    }
+
+    /// Check if commands should be handled in a given Discord channel.
+    /// Returns true if commands are enabled for this channel.
+    /// If enable_commands_channels is None or empty, commands are allowed in all channels.
+    /// Checks against both channel name and channel ID (as string).
+    pub fn command_allowed_in_channel(&self, channel_name: &str, channel_id: u64) -> bool {
+        match &self.enable_commands_channels {
+            Some(allowed_channels) if !allowed_channels.is_empty() => {
+                let channel_lower = channel_name.to_lowercase();
+                let channel_id_str = channel_id.to_string();
+                allowed_channels.iter().any(|c| {
+                    let c_lower = c.to_lowercase();
+                    c_lower == channel_lower || c == &channel_id_str
+                })
+            }
+            _ => true,
+        }
     }
 }
 

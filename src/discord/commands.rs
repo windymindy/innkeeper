@@ -49,7 +49,10 @@ impl CommandHandler {
         msg: &Message,
         content: &str,
     ) -> anyhow::Result<bool> {
-        if !content.starts_with('!') {
+        if content.len() > 100 {
+            return Ok(false);
+        }
+        if !content.starts_with('!') && !content.starts_with('?') {
             return Ok(false);
         }
 
@@ -60,7 +63,7 @@ impl CommandHandler {
         debug!("Processing command: {} with args: {:?}", command, args);
 
         match command.as_str() {
-            "who" => {
+            "who" | "online" => {
                 self.handle_who(ctx, msg, args).await?;
                 Ok(true)
             }
