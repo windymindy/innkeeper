@@ -17,6 +17,7 @@ use crate::bridge::{Bridge, BridgeState, ChannelConfig};
 use crate::common::BridgeMessage;
 use crate::config::types::Config;
 use crate::bridge::orchestrator::parse_channel_config;
+use crate::discord::commands::CommandResponse;
 
 use super::commands::WowCommand;
 use super::handler::BridgeHandler;
@@ -30,6 +31,8 @@ pub struct DiscordChannels {
     pub wow_to_discord_rx: mpsc::UnboundedReceiver<BridgeMessage>,
     /// Sender for commands from Discord.
     pub command_tx: mpsc::UnboundedSender<WowCommand>,
+    /// Receiver for command responses from game client.
+    pub cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
 }
 
 /// Shared state that persists across reconnections.
@@ -50,8 +53,9 @@ impl ClientConfig {
         &self,
         wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
+        cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
     ) -> anyhow::Result<Client> {
-        let handler = BridgeHandler::new(wow_rx, command_tx);
+        let handler = BridgeHandler::new(wow_rx, command_tx, cmd_response_rx);
 
         let client = Client::builder(&self.token, self.intents)
             .event_handler(handler)
@@ -157,6 +161,7 @@ impl DiscordBotBuilder {
         let handler = BridgeHandler::new(
             self.channels.wow_to_discord_rx,
             self.channels.command_tx.clone(),
+            self.channels.cmd_response_rx,
         );
 
         let client = Client::builder(&client_config.token, client_config.intents)
@@ -178,6 +183,7 @@ impl DiscordBotBuilder {
             config: client_config,
             outgoing_wow_tx: self.channels.outgoing_wow_tx,
             command_tx: self.channels.command_tx,
+            bridge: self.bridge,
         })
     }
 }
@@ -190,6 +196,8 @@ pub struct DiscordBot {
     // Keep senders to create new receivers for reconnection
     outgoing_wow_tx: mpsc::UnboundedSender<BridgeMessage>,
     command_tx: mpsc::UnboundedSender<WowCommand>,
+    // Bridge reference for formatting
+    bridge: Arc<Bridge>,
 }
 
 impl DiscordBot {
@@ -197,6 +205,8 @@ impl DiscordBot {
     pub fn http(&self) -> Arc<Http> {
         self.http.clone()
     }
+
+    
 
     /// Run the Discord bot with automatic reconnection.
     pub async fn run(mut self) {
@@ -223,7 +233,11 @@ impl DiscordBot {
                     // Update the shared state with new channel info if needed
                     // The outgoing_wow_tx is already stored in shared state
 
-                    match self.config.build_client(new_wow_rx, self.command_tx.clone()).await {
+                    // Create a dummy command response channel for reconnection
+                    // (command responses during reconnection will be lost)
+                    let (_dummy_cmd_tx, dummy_cmd_rx) = mpsc::unbounded_channel::<CommandResponse>();
+
+                    match self.config.build_client(new_wow_rx, self.command_tx.clone(), dummy_cmd_rx).await {
                         Ok(client) => {
                             // Update HTTP reference
                             self.http = client.http.clone();
@@ -281,14 +295,4 @@ fn calculate_backoff(retry_count: u32, base_delay: Duration, max_delay: Duration
     std::cmp::min(exp_delay, max_delay)
 }
 
-/// Send a command response to a Discord channel.
-pub async fn send_command_response(
-    http: &Http,
-    channel_id: u64,
-    content: &str,
-) -> anyhow::Result<()> {
-    use serenity::model::id::ChannelId;
-    let channel = ChannelId::new(channel_id);
-    channel.say(http, content).await.map(|_| ())?;
-    Ok(())
-}
+

@@ -83,13 +83,12 @@ async fn main() -> Result<()> {
         outgoing_wow_tx: outgoing_wow_tx.clone(),
         wow_to_discord_rx,
         command_tx: discord_command_tx.clone(),
+        cmd_response_rx,
     };
 
     let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels, bridge.clone())
         .build()
         .await?;
-
-    let discord_http = discord_bot.http();
 
     // ============================================================
     // Spawn forwarding tasks
@@ -110,28 +109,14 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Task 2: Command responses -> Discord
-    let forward_cmd_responses = {
-        let mut rx = cmd_response_rx;
-        let http = discord_http.clone();
-        tokio::spawn(async move {
-            while let Some(response) = rx.recv().await {
-                if let Err(e) = discord::send_command_response(&http, response.channel_id, &response.content).await {
-                    error!("Failed to send command response: {}", e);
-                }
-            }
-            info!("Command response task ended");
-        })
-    };
-
-    // Task 3: Command converter (Discord commands -> Game commands)
+    // Task 2: Command converter (Discord commands -> Game commands)
     let command_converter = {
         let cmd_tx = command_tx;
         tokio::spawn(async move {
             while let Some(cmd) = discord_command_rx.recv().await {
                 let bridge_cmd = match cmd {
-                    WowCommand::Who { args: _, reply_channel } => {
-                        BridgeCommand::Who { reply_channel }
+                    WowCommand::Who { args, reply_channel } => {
+                        BridgeCommand::Who { args, reply_channel }
                     }
                     WowCommand::GuildMotd { reply_channel } => {
                         BridgeCommand::Gmotd { reply_channel }
@@ -211,7 +196,6 @@ async fn main() -> Result<()> {
         _ = &mut game_task => false,
         _ = discord_task => false,
         _ = forward_to_discord => false,
-        _ = forward_cmd_responses => false,
         _ = command_converter => false,
     };
 

@@ -6,6 +6,7 @@ use bytes::Bytes;
 use sha1::{Digest, Sha1};
 use tracing::{debug, error, info, warn};
 
+use crate::common::messages::GuildEventInfo;
 use crate::common::types::{ChatMessage, GuildEvent, GuildInfo, GuildMember, Player};
 use crate::protocol::game::chat::{
     get_language_for_race, ChannelNotify, ChatPlayerNotFound, JoinChannelWotLK, MessageChat,
@@ -38,6 +39,8 @@ pub struct GameHandler {
     pub guild_roster: HashMap<u64, GuildMember>,
     /// Guild MOTD
     pub guild_motd: Option<String>,
+    /// Last time guild roster was requested (for periodic updates)
+    pub last_roster_request: Option<std::time::Instant>,
 
     /// Cache of player names by GUID
     pub player_names: HashMap<u64, Player>,
@@ -59,6 +62,7 @@ impl GameHandler {
             guild_info: None,
             guild_roster: HashMap::new(),
             guild_motd: None,
+            last_roster_request: None,
             player_names: HashMap::new(),
             pending_messages: HashMap::new(),
         }
@@ -238,7 +242,7 @@ impl GameHandler {
 
         // Log based on notification type
         match notify.notify_type {
-            0 => info!("{}", desc),
+            0 | 2 => info!("{}", desc),
             _ => warn!("{}", desc),
         }
 
@@ -317,19 +321,74 @@ impl GameHandler {
                 .insert(member.guid, member.to_guild_member(&rank_name));
         }
 
+        // Update last request timestamp
+        self.last_roster_request = Some(std::time::Instant::now());
+
         Ok(())
     }
 
-    /// Handle SMSG_GUILD_EVENT.
-    /// Returns (player_name, event_name) if this is a trackable guild event.
-    pub fn handle_guild_event(&mut self, mut payload: Bytes) -> Result<Option<(String, String)>> {
-        let event = GuildEventPacket::decode(&mut payload)?;
+    /// Check if guild roster should be updated (every 60 seconds).
+    pub fn should_update_guild_roster(&self) -> bool {
+        if self.guild_id == 0 {
+            return false; // Not in a guild
+        }
 
-        // Get player name
-        let player_name = event.player_name().map(|s| s.to_string());
+        match self.last_roster_request {
+            None => true, // Never requested
+            Some(last) => last.elapsed().as_secs() >= 60,
+        }
+    }
+
+    /// Request guild roster update and update timestamp.
+    pub fn request_guild_roster(&mut self) -> GuildRosterRequest {
+        self.last_roster_request = Some(std::time::Instant::now());
+        self.build_guild_roster_request()
+    }
+
+    /// Handle SMSG_GUILD_EVENT.
+    /// Returns GuildEventInfo if this is a trackable guild event.
+    pub fn handle_guild_event(&mut self, mut payload: Bytes) -> Result<Option<GuildEventInfo>> {
+        let event = GuildEventPacket::decode(&mut payload)?;
 
         // Convert event type to GuildEvent enum
         let guild_event = GuildEvent::from_id(event.event_type);
+
+        // Get config name from GuildEvent enum
+        let event_name = match guild_event {
+            Some(e) => e.config_name().to_string(),
+            None => return Ok(None),
+        };
+
+        // For REMOVED events, the strings are swapped:
+        // strings[0] = kicked player (target), strings[1] = kicker (user)
+        // For MOTD events:
+        // strings[0] = MOTD text (no player name in packet)
+        // For all other events:
+        // strings[0] = player who triggered the event
+        let (player_name, target_name, rank_name) = match event.event_type {
+            crate::protocol::game::guild::guild_events::GE_REMOVED => {
+                let kicker = event.target_name().map(|s| s.to_string()); // strings[1]
+                let kicked = event.player_name().map(|s| s.to_string()); // strings[0]
+                (kicker, kicked, None)
+            }
+            crate::protocol::game::guild::guild_events::GE_MOTD => {
+                // MOTD only has one string: the MOTD text itself
+                // No player name is included in the packet
+                let motd_text = event.player_name().map(|s| s.to_string()); // strings[0]
+                (None, motd_text, None)
+            }
+            crate::protocol::game::guild::guild_events::GE_PROMOTED
+            | crate::protocol::game::guild::guild_events::GE_DEMOTED => {
+                let player = event.player_name().map(|s| s.to_string()); // strings[0]
+                let target = event.target_name().map(|s| s.to_string()); // strings[1]
+                let rank = event.rank_name().map(|s| s.to_string()); // strings[2]
+                (player, target, rank)
+            }
+            _ => {
+                let player = event.player_name().map(|s| s.to_string()); // strings[0]
+                (player, None, None)
+            }
+        };
 
         // Skip events from self (except MOTD)
         if event.event_type != crate::protocol::game::guild::guild_events::GE_MOTD {
@@ -347,13 +406,22 @@ impl GameHandler {
             self.guild_motd = Some(motd.to_string());
         }
 
-        // Get config name from GuildEvent enum
-        let event_name = guild_event.map(|e| e.config_name().to_string());
+        // For MOTD events, player_name can be None (no player in packet)
+        // Use empty string in that case
+        let player_name = match player_name {
+            Some(name) => name,
+            None if event.event_type == crate::protocol::game::guild::guild_events::GE_MOTD => {
+                String::new()
+            }
+            None => return Ok(None),
+        };
 
-        match (player_name, event_name) {
-            (Some(name), Some(event)) => Ok(Some((name, event))),
-            _ => Ok(None),
-        }
+        Ok(Some(GuildEventInfo {
+            event_name,
+            player_name,
+            target_name,
+            rank_name,
+        }))
     }
 
     /// Build CMSG_GUILD_QUERY packet.
@@ -410,6 +478,38 @@ impl GameHandler {
             if online.len() == 1 { "" } else { "s" },
             lines.join(", ")
         )
+    }
+
+    /// Search for a guild member by name (case-insensitive).
+    pub fn search_guild_member(&self, search_name: &str) -> String {
+        let search_lower = search_name.to_lowercase();
+
+        // Search in guild roster first
+        if let Some(member) = self
+            .guild_roster
+            .values()
+            .find(|m| m.name.to_lowercase() == search_lower)
+        {
+            let class_name = member.class.map_or("Unknown", |c| c.name());
+            let status = if member.online { "Online" } else { "Offline" };
+            return format!(
+                "{} (Level {} {}) - {}",
+                member.name, member.level, class_name, status
+            );
+        }
+
+        // If player is online but not in guild roster (rare case)
+        if let Some(ref player) = self.player {
+            if player.name.to_lowercase() == search_lower {
+                let class_name = player.class.map_or("Unknown", |c| c.name());
+                return format!(
+                    "{} (Level {} {}) - Online (You)",
+                    player.name, player.level, class_name
+                );
+            }
+        }
+
+        format!("Player '{}' not found.", search_name)
     }
 
     /// Get guild MOTD.

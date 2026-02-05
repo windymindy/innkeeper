@@ -6,7 +6,7 @@ pub mod resources;
 pub mod types;
 
 // Re-export message types from messages module
-pub use messages::{BridgeCommand, BridgeMessage, DiscordMessage};
+pub use messages::{BridgeCommand, BridgeMessage, DiscordMessage, GuildEventInfo};
 
 // BridgeChannels is now in the bridge module
 pub use crate::bridge::BridgeChannels;

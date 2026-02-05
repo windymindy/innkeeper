@@ -3,7 +3,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::common::{BridgeChannels, BridgeCommand, BridgeMessage};
 use crate::config::types::Config;
@@ -111,7 +111,7 @@ impl GameClient {
                                         let guild_query = handler.build_guild_query(handler.guild_id);
                                         connection.send(guild_query.into()).await?;
                                         
-                                        let roster_req = handler.build_guild_roster_request();
+                                        let roster_req = handler.request_guild_roster();
                                         connection.send(roster_req.into()).await?;
                                     }
                                     
@@ -126,15 +126,15 @@ impl GameClient {
                                     match handler.handle_messagechat(payload)? {
                                         Some(chat_msg) => {
                                             // Convert to bridge message
-                                             let wow_msg = BridgeMessage {
-                                                 sender: Some(chat_msg.sender_name),
-                                                 content: chat_msg.content,
-                                                 chat_type: chat_msg.chat_type.to_id(),
-                                                 channel_name: chat_msg.channel_name,
-                                                 format: chat_msg.format,
-                                                 guild_event: None,
-                                             };
-                                            
+                                            let wow_msg = BridgeMessage {
+                                                sender: Some(chat_msg.sender_name),
+                                                content: chat_msg.content,
+                                                chat_type: chat_msg.chat_type.to_id(),
+                                                channel_name: chat_msg.channel_name,
+                                                format: chat_msg.format,
+                                                guild_event: None,
+                                            };
+
                                             if let Err(e) = self.channels.wow_tx.send(wow_msg) {
                                                 warn!("Failed to send message to bridge: {}", e);
                                             }
@@ -155,15 +155,15 @@ impl GameClient {
                                     let resolved = handler.handle_name_query(payload)?;
                                     for chat_msg in resolved {
                                         // Convert to bridge message
-                                             let wow_msg = BridgeMessage {
-                                                 sender: Some(chat_msg.sender_name),
-                                                 content: chat_msg.content,
-                                                 chat_type: chat_msg.chat_type.to_id(),
-                                                 channel_name: chat_msg.channel_name,
-                                                 format: chat_msg.format,
-                                                 guild_event: None,
-                                             };
-                                        
+                                        let wow_msg = BridgeMessage {
+                                            sender: Some(chat_msg.sender_name),
+                                            content: chat_msg.content,
+                                            chat_type: chat_msg.chat_type.to_id(),
+                                            channel_name: chat_msg.channel_name,
+                                            format: chat_msg.format,
+                                            guild_event: None,
+                                        };
+
                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
                                             warn!("Failed to send message to bridge: {}", e);
                                         }
@@ -180,114 +180,145 @@ impl GameClient {
                                     info!("Guild roster loaded: {} members", handler.guild_roster.len());
                                 }
                                 SMSG_GUILD_EVENT => {
-                                     if let Some((player_name, event_name)) = handler.handle_guild_event(payload)? {
-                                         info!("Guild event: {} ({})", player_name, event_name);
-                                         // Send guild event as a BridgeMessage to Discord
-                                         let wow_msg = BridgeMessage {
-                                             sender: Some(player_name), // Player who triggered event
-                                             content: "".to_string(),    // Content not needed, format has message
-                                             chat_type: chat_events::CHAT_MSG_GUILD,
-                                             channel_name: None,
-                                             format: None,
-                                             guild_event: Some(event_name), // Bridge checks enabled and gets format
-                                         };
-                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                             warn!("Failed to send guild event to bridge: {}", e);
-                                         }
-                                     }
+                                    if let Some(event_data) = handler.handle_guild_event(payload)? {
+                                        // For MOTD events, the target_name contains the MOTD text
+                                        // which should go in the content field for %message placeholder
+                                        let content = if event_data.event_name == "motd" {
+                                            event_data.target_name.clone().unwrap_or_default()
+                                        } else {
+                                            String::new()
+                                        };
+
+                                        info!(
+                                            guild_event = %event_data.event_name,
+                                            player = %event_data.player_name,
+                                            target = ?event_data.target_name,
+                                            rank = ?event_data.rank_name,
+                                            content = %content,
+                                            "Guild event received"
+                                        );
+
+                                        // Check if we need to update roster before moving event_data
+                                        let should_update_roster = ["online", "offline", "joined", "left", "removed"]
+                                            .contains(&event_data.event_name.as_str());
+                                        let event_name = event_data.event_name.clone();
+
+                                        // Send guild event as a BridgeMessage to Discord
+                                        let wow_msg = BridgeMessage {
+                                            sender: Some(event_data.player_name.clone()), // Player who triggered event
+                                            content,    // MOTD text goes here for %message placeholder
+                                            chat_type: chat_events::CHAT_MSG_GUILD,
+                                            channel_name: None,
+                                            format: None,
+                                            guild_event: Some(event_data), // Contains all event info for formatting
+                                        };
+                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                            warn!("Failed to send guild event to bridge: {}", e);
+                                        }
+
+                                        // Update roster on online/offline/join/left events
+                                        if should_update_roster {
+                                            let roster_req = handler.request_guild_roster();
+                                            if let Err(e) = connection.send(roster_req.into()).await {
+                                                warn!("Failed to send guild roster request after event: {}", e);
+                                            } else {
+                                                debug!("Requested guild roster update after {} event", event_name);
+                                            }
+                                        }
+                                    }
                                 }
                                 SMSG_NOTIFICATION => {
-                                     if let Ok(msg) = handler.handle_notification(payload) {
-                                         // Send notification as system message to Discord
-                                         let wow_msg = BridgeMessage {
-                                             sender: None,
-                                             content: msg,
-                                             chat_type: chat_events::CHAT_MSG_SYSTEM,
-                                             channel_name: None,
-                                             format: None,
-                                             guild_event: None,
-                                         };
-                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                             warn!("Failed to send notification to bridge: {}", e);
-                                         }
-                                     }
+                                    if let Ok(msg) = handler.handle_notification(payload) {
+                                        // Send notification as system message to Discord
+                                        let wow_msg = BridgeMessage {
+                                               sender: None,
+                                               content: msg,
+                                               chat_type: chat_events::CHAT_MSG_SYSTEM,
+                                               channel_name: None,
+                                               format: None,
+                                               guild_event: None,
+                                        };
+                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                            warn!("Failed to send notification to bridge: {}", e);
+                                        }
+                                    }
                                 }
                                 SMSG_MOTD => {
-                                     if let Ok(Some(msg)) = handler.handle_motd(payload) {
-                                         // Send MOTD as system message to Discord
-                                         let wow_msg = BridgeMessage {
-                                             sender: None,
-                                             content: msg,
-                                             chat_type: chat_events::CHAT_MSG_SYSTEM,
-                                             channel_name: None,
-                                             format: None,
-                                             guild_event: None,
-                                         };
-                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                             warn!("Failed to send MOTD to bridge: {}", e);
-                                         }
-                                     }
+                                    if let Ok(Some(msg)) = handler.handle_motd(payload) {
+                                        // Send MOTD as system message to Discord
+                                        let wow_msg = BridgeMessage {
+                                            sender: None,
+                                            content: msg,
+                                            chat_type: chat_events::CHAT_MSG_SYSTEM,
+                                            channel_name: None,
+                                            format: None,
+                                            guild_event: None,
+                                        };
+                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                            warn!("Failed to send MOTD to bridge: {}", e);
+                                        }
+                                    }
                                 }
                                 SMSG_GM_MESSAGECHAT => {
-                                     match handler.handle_gm_messagechat(payload)? {
-                                         Some(chat_msg) => {
-                                             // Convert to bridge message
-                                             let wow_msg = BridgeMessage {
-                                                 sender: Some(chat_msg.sender_name),
-                                                 content: chat_msg.content,
-                                                 chat_type: chat_msg.chat_type.to_id(),
-                                                 channel_name: chat_msg.channel_name,
-                                                 format: chat_msg.format,
-                                                 guild_event: None,
-                                             };
+                                    match handler.handle_gm_messagechat(payload)? {
+                                        Some(chat_msg) => {
+                                            // Convert to bridge message
+                                            let wow_msg = BridgeMessage {
+                                                sender: Some(chat_msg.sender_name),
+                                                content: chat_msg.content,
+                                                chat_type: chat_msg.chat_type.to_id(),
+                                                channel_name: chat_msg.channel_name,
+                                                format: chat_msg.format,
+                                                guild_event: None,
+                                            };
 
-                                             if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                                 warn!("Failed to send GM message to bridge: {}", e);
-                                             }
-                                         }
-                                         None => {
-                                             // Name query needed - check if we have pending messages
-                                             if !handler.pending_messages.is_empty() {
-                                                 // Send name queries for all unknown GUIDs
-                                                 for guid in handler.pending_messages.keys() {
-                                                     let name_query = handler.build_name_query(*guid);
-                                                     connection.send(name_query.into()).await?;
-                                                 }
-                                             }
-                                         }
-                                     }
+                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                                warn!("Failed to send GM message to bridge: {}", e);
+                                            }
+                                        }
+                                        None => {
+                                            // Name query needed - check if we have pending messages
+                                            if !handler.pending_messages.is_empty() {
+                                                // Send name queries for all unknown GUIDs
+                                                for guid in handler.pending_messages.keys() {
+                                                    let name_query = handler.build_name_query(*guid);
+                                                    connection.send(name_query.into()).await?;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 SMSG_SERVER_MESSAGE => {
-                                     if let Ok(msg) = handler.handle_server_message(payload) {
-                                         // Send server message as system message to Discord
-                                         let wow_msg = BridgeMessage {
-                                             sender: None,
-                                             content: msg,
-                                             chat_type: chat_events::CHAT_MSG_SYSTEM,
-                                             channel_name: None,
-                                             format: None,
-                                             guild_event: None,
-                                         };
-                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                             warn!("Failed to send server message to bridge: {}", e);
-                                         }
-                                     }
+                                    if let Ok(msg) = handler.handle_server_message(payload) {
+                                        // Send server message as system message to Discord
+                                        let wow_msg = BridgeMessage {
+                                            sender: None,
+                                            content: msg,
+                                            chat_type: chat_events::CHAT_MSG_SYSTEM,
+                                            channel_name: None,
+                                            format: None,
+                                            guild_event: None,
+                                        };
+                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                            warn!("Failed to send server message to bridge: {}", e);
+                                        }
+                                    }
                                 }
                                 SMSG_CHAT_PLAYER_NOT_FOUND => {
-                                     if let Ok(Some(chat_msg)) = handler.handle_chat_player_not_found(payload) {
-                                         // Send "player not found" as WHISPER_INFORM to Discord
-                                         let wow_msg = BridgeMessage {
-                                             sender: Some(chat_msg.sender_name),
-                                             content: chat_msg.content,
-                                             chat_type: chat_msg.chat_type.to_id(),
-                                             channel_name: chat_msg.channel_name,
-                                             format: chat_msg.format,
-                                             guild_event: None,
-                                         };
-                                         if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                             warn!("Failed to send player not found message to bridge: {}", e);
-                                         }
-                                     }
+                                    if let Ok(Some(chat_msg)) = handler.handle_chat_player_not_found(payload) {
+                                        // Send "player not found" as WHISPER_INFORM to Discord
+                                        let wow_msg = BridgeMessage {
+                                            sender: Some(chat_msg.sender_name),
+                                            content: chat_msg.content,
+                                            chat_type: chat_msg.chat_type.to_id(),
+                                            channel_name: chat_msg.channel_name,
+                                            format: chat_msg.format,
+                                            guild_event: None,
+                                        };
+                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                            warn!("Failed to send player not found message to bridge: {}", e);
+                                        }
+                                    }
                                 }
                                 SMSG_PONG => {
                                      let pong = Pong::decode(&mut payload)?;
@@ -329,6 +360,16 @@ impl GameClient {
                         if let Err(e) = connection.send(ping.into()).await {
                             return Err(anyhow!("Failed to send ping: {}", e));
                         }
+
+                        // Periodic guild roster update (every ~60 seconds)
+                        if handler.should_update_guild_roster() {
+                            let roster_req = handler.request_guild_roster();
+                            if let Err(e) = connection.send(roster_req.into()).await {
+                                warn!("Failed to send guild roster request: {}", e);
+                            } else {
+                                debug!("Requested guild roster update");
+                            }
+                        }
                     }
                 }
                 // Outgoing messages from bridge (Discord -> WoW)
@@ -347,8 +388,12 @@ impl GameClient {
                 // Commands from Discord (!who, !gmotd)
                 Some(command) = self.channels.command_rx.recv() => {
                     match command {
-                        BridgeCommand::Who { reply_channel } => {
-                            let response = handler.get_online_guildies();
+                        BridgeCommand::Who { args, reply_channel } => {
+                            let response = if let Some(search_name) = args {
+                                handler.search_guild_member(&search_name)
+                            } else {
+                                handler.get_online_guildies()
+                            };
                             info!("!who command (channel {}): {}", reply_channel, response);
                             // Send response back to Discord
                             let cmd_response = CommandResponse {

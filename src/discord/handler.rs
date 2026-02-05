@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState};
 use crate::common::{BridgeMessage, DiscordMessage};
-use crate::discord::commands::{CommandHandler, WowCommand};
+use crate::discord::commands::{CommandHandler, CommandResponse, WowCommand};
 
 // Re-export BridgeState's TypeMapKey implementation for Discord's context system
 impl TypeMapKey for BridgeState {
@@ -33,16 +33,20 @@ pub struct BridgeHandler {
     wow_rx: Arc<Mutex<mpsc::UnboundedReceiver<BridgeMessage>>>,
     /// Command handler.
     command_handler: CommandHandler,
+    /// Receiver for command responses.
+    cmd_response_rx: Arc<Mutex<mpsc::UnboundedReceiver<CommandResponse>>>,
 }
 
 impl BridgeHandler {
     pub fn new(
         wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
+        cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
     ) -> Self {
         Self {
             wow_rx: Arc::new(Mutex::new(wow_rx)),
             command_handler: CommandHandler::new(command_tx),
+            cmd_response_rx: Arc::new(Mutex::new(cmd_response_rx)),
         }
     }
 }
@@ -214,7 +218,7 @@ impl EventHandler for BridgeHandler {
                             msg.sender.as_deref(),
                             &processed_content,
                             msg.format.as_deref(),
-                            msg.guild_event.as_deref(),
+                            msg.guild_event.as_ref(),
                         );
 
                         // Send filtered messages to appropriate Discord channels
@@ -287,6 +291,43 @@ impl EventHandler for BridgeHandler {
             }
 
             info!("WoW -> Discord forwarding task ended");
+        });
+
+        // Start command response forwarding task
+        let cmd_response_rx = Arc::clone(&self.cmd_response_rx);
+        let cmd_http = ctx.http.clone();
+        let cmd_data = ctx.data.clone();
+
+        tokio::spawn(async move {
+            let mut rx = cmd_response_rx.lock().await;
+
+            while let Some(response) = rx.recv().await {
+                let data = cmd_data.read().await;
+                if let Some(bridge) = data.get::<Bridge>() {
+                    if let Some(state) = data.get::<BridgeState>() {
+                        let state = state.read().await;
+
+                        // Apply bridge formatting (e.g., MOTD format)
+                        let formatted = bridge.format_command_response(&response.content);
+
+                        // Apply post-bridge processing (emojis, markdown escape)
+                        let result = state.resolver.process_post_bridge(
+                            &ctx.cache,
+                            serenity::model::id::ChannelId::new(response.channel_id),
+                            &formatted,
+                            state.self_user_id.unwrap_or(0),
+                        );
+
+                        // Send to Discord
+                        use serenity::model::id::ChannelId;
+                        let channel = ChannelId::new(response.channel_id);
+                        if let Err(e) = channel.say(&cmd_http, &result.message).await {
+                            error!("Failed to send command response to Discord: {}", e);
+                        }
+                    }
+                }
+            }
+            info!("Command response forwarding task ended");
         });
     }
 

@@ -60,6 +60,24 @@ impl Bridge {
         self.router.get_channels_to_join()
     }
 
+    /// Format a command response before sending to Discord.
+    ///
+    /// Applies MOTD formatting if configured and the response appears to be a MOTD.
+    pub fn format_command_response(&self, content: &str) -> String {
+        // Check if MOTD format is configured
+        if let Some(format) = self.config.get_guild_event_format("motd") {
+            // Skip formatting for !who responses (they start with "**" for bold guild name)
+            // or error messages (start with "No ")
+            if !content.starts_with("**") && !content.starts_with("No ") {
+                // This looks like a MOTD response, apply formatting
+                let formatter = MessageFormatter::new(&format);
+                let ctx = FormatContext::new("", content);
+                return formatter.format(&ctx);
+            }
+        }
+        content.to_string()
+    }
+
     /// Process a dot command message from Discord and prepare for WoW.
     ///
     /// Dot commands are sent directly without formatting to the first matching route.
@@ -234,10 +252,11 @@ impl Bridge {
         sender: Option<&str>,
         content: &str,
         format_override: Option<&str>,
-        guild_event: Option<&str>,
+        guild_event: Option<&crate::common::messages::GuildEventInfo>,
     ) -> Vec<(String, String)> {
         // Check if this is a guild event and if it's enabled
-        if let Some(event_name) = guild_event {
+        let event_name = guild_event.as_ref().map(|e| e.event_name.as_str());
+        if let Some(event_name) = event_name {
             if !self.config.is_guild_event_enabled(event_name) {
                 debug!(
                     "Guild event '{}' is disabled in config, not sending to Discord",
@@ -263,7 +282,7 @@ impl Bridge {
                 .map(String::from)
                 .or_else(|| {
                     // If this is a guild event, get format from guild event config
-                    if let Some(event_name) = guild_event {
+                    if let Some(event_name) = event_name {
                         self.config.get_guild_event_format(event_name)
                     } else {
                         None
@@ -273,8 +292,17 @@ impl Bridge {
                 .unwrap_or_else(|| "[%user]: %message".to_string());
 
             let formatter = MessageFormatter::new(&format);
+            let target = guild_event
+                .as_ref()
+                .and_then(|e| e.target_name.as_deref())
+                .unwrap_or(channel_name.unwrap_or(""));
+            let rank = guild_event
+                .as_ref()
+                .and_then(|e| e.rank_name.as_deref())
+                .unwrap_or("");
             let ctx = FormatContext::new(sender.unwrap_or(""), content)
-                .with_target(channel_name.unwrap_or(""));
+                .with_target(target)
+                .with_rank(rank);
             let formatted = formatter.format(&ctx);
 
             // Apply global filter first, then per-channel filter

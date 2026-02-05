@@ -299,8 +299,8 @@ impl RealmHandler {
         let result = data[2];
         let auth_result = AuthResult::from_code(result);
 
-        if auth_result != AuthResult::Success {
-            return Err(anyhow!("Authentication failed: {:?}", auth_result));
+        if !auth_result.is_success() {
+            return Err(anyhow!("{}", auth_result.get_message()));
         }
 
         // Check security flag (should be 0, otherwise 2FA required)
@@ -349,8 +349,8 @@ impl RealmHandler {
         let result = data[1];
         let auth_result = AuthResult::from_code(result);
 
-        if auth_result != AuthResult::Success {
-            return Err(anyhow!("Authentication failed: {:?}", auth_result));
+        if !auth_result.is_success() {
+            return Err(anyhow!("{}", auth_result.get_message()));
         }
 
         // Verify server proof

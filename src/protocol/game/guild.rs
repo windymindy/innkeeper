@@ -181,8 +181,6 @@ pub struct GuildRoster {
     pub member_count: u32,
     pub motd: String,
     pub guild_info: String,
-    pub rank_count: u32,
-    pub ranks: Vec<u32>, // Rights flags for each rank
     pub members: Vec<GuildRosterMember>,
 }
 
@@ -209,76 +207,94 @@ impl PacketDecode for GuildRoster {
                 buf.remaining()
             ));
         }
-
         let rank_count = buf.get_u32_le();
-
-        // Read rank rights
-        let mut ranks = Vec::with_capacity(rank_count as usize);
-        for _ in 0..rank_count {
-            if buf.remaining() >= 4 {
-                ranks.push(buf.get_u32_le());
-            }
+        if buf.remaining() < (8 + 48) * (rank_count as usize) {
+            return Err(anyhow!(
+                "Packet too short: need {} bytes, got {}",
+                (8 + 48) * rank_count,
+                buf.remaining()
+            ));
         }
+
+        buf.advance((8 + 48) * (rank_count as usize));
 
         // Read members
         let mut members = Vec::with_capacity(member_count as usize);
-        for _ in 0..member_count {
+        for i in 0..member_count {
             if buf.remaining() < 9 {
-                break;
+                return Err(anyhow!(
+                    "Packet too short: need {} bytes, got {}",
+                    9,
+                    buf.remaining()
+                ));
             }
-
             let guid = buf.get_u64_le();
             let online = buf.get_u8() != 0;
+
+            if buf.remaining() < 1 {
+                return Err(anyhow!(
+                    "Packet too short: need {} bytes, got {}",
+                    1,
+                    buf.remaining()
+                ));
+            }
             let name = read_cstring(buf)?;
 
-            if buf.remaining() < 4 {
-                break;
+            // Skip guild rank (4 bytes) - not stored
+            if buf.remaining() < 11 {
+                return Err(anyhow!(
+                    "Packet too short: need {} bytes, got {}",
+                    11,
+                    buf.remaining()
+                ));
             }
-            let rank = buf.get_u32_le();
-
-            if buf.remaining() < 3 {
-                break;
-            }
+            buf.advance(4);
             let level = buf.get_u8();
             let class = buf.get_u8();
-            let gender = buf.get_u8();
-
-            if buf.remaining() < 4 {
-                break;
-            }
+            buf.advance(1);
             let zone_id = buf.get_u32_le();
 
             // Last logoff only present for offline members
-            let last_logoff = if !online && buf.remaining() >= 4 {
-                buf.get_f32_le()
-            } else {
-                0.0
-            };
+            if !online && buf.remaining() < 4 {
+                return Err(anyhow!(
+                    "Packet too short: need {} bytes, got {}",
+                    4,
+                    buf.remaining()
+                ));
+            }
+            let last_logoff = if !online { buf.get_f32_le() } else { 0.0 };
 
-            let public_note = read_cstring(buf)?;
-            let officer_note = read_cstring(buf)?;
+            // Skip public and officer notes (strings)
+            let _public_note = read_cstring(buf)?;
+            let _officer_note = read_cstring(buf)?;
 
             members.push(GuildRosterMember {
                 guid,
                 online,
                 name,
-                rank,
+                rank: 0, // Not stored, skipped
                 level,
                 class,
-                gender,
+                gender: 0, // Not present in packet
                 zone_id,
                 last_logoff,
-                public_note,
-                officer_note,
+                public_note: String::new(),
+                officer_note: String::new(),
             });
+        }
+
+        if members.len() != member_count as usize {
+            tracing::warn!(
+                "Guild roster parsed only {}/{} members",
+                members.len(),
+                member_count
+            );
         }
 
         Ok(GuildRoster {
             member_count,
             motd,
             guild_info,
-            rank_count,
-            ranks,
             members,
         })
     }
@@ -300,6 +316,16 @@ impl GuildEventPacket {
     /// Get the primary affected player name (if any).
     pub fn player_name(&self) -> Option<&str> {
         self.strings.first().map(|s| s.as_str())
+    }
+
+    /// Get the target player name for promotion/demotion events.
+    pub fn target_name(&self) -> Option<&str> {
+        self.strings.get(1).map(|s| s.as_str())
+    }
+
+    /// Get the rank name for promotion/demotion events.
+    pub fn rank_name(&self) -> Option<&str> {
+        self.strings.get(2).map(|s| s.as_str())
     }
 
     /// Get the MOTD text (for GE_MOTD events).

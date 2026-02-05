@@ -1,7 +1,7 @@
 //! Message formatting for display.
 //!
 //! Handles placeholder substitution in message format strings.
-//! Supports placeholders: %time, %user, %message, %target, %channel
+//! Supports placeholders: %time, %user, %message, %target, %channel, %rank
 
 use chrono::Local;
 
@@ -47,6 +47,7 @@ impl MessageFormatter {
     /// - `%message` - The actual message content
     /// - `%target` - Target channel or player (for whispers)
     /// - `%channel` - Channel name
+    /// - `%rank` - Rank name (for promotion/demotion events)
     pub fn format(&self, ctx: &FormatContext) -> String {
         self.format
             .replace("%time", &ctx.time())
@@ -54,6 +55,7 @@ impl MessageFormatter {
             .replace("%message", &ctx.message)
             .replace("%target", &ctx.target)
             .replace("%channel", &ctx.channel)
+            .replace("%rank", &ctx.rank)
     }
 
     /// Get the format string.
@@ -72,6 +74,7 @@ impl MessageFormatter {
             .replace("%message", "")
             .replace("%target", "")
             .replace("%channel", "")
+            .replace("%rank", "")
             .len();
 
         max_total.saturating_sub(overhead)
@@ -89,6 +92,8 @@ pub struct FormatContext {
     pub target: String,
     /// Channel name.
     pub channel: String,
+    /// Rank name (for promotion/demotion events).
+    pub rank: String,
 }
 
 impl FormatContext {
@@ -99,6 +104,7 @@ impl FormatContext {
             message: message.into(),
             target: String::new(),
             channel: String::new(),
+            rank: String::new(),
         }
     }
 
@@ -111,6 +117,12 @@ impl FormatContext {
     /// Set the channel.
     pub fn with_channel(mut self, channel: impl Into<String>) -> Self {
         self.channel = channel.into();
+        self
+    }
+
+    /// Set the rank.
+    pub fn with_rank(mut self, rank: impl Into<String>) -> Self {
+        self.rank = rank.into();
         self
     }
 
