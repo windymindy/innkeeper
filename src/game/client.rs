@@ -9,7 +9,7 @@ use crate::common::{BridgeChannels, BridgeCommand, BridgeMessage};
 use crate::config::types::Config;
 use crate::discord::commands::CommandResponse;
 
-use crate::protocol::game::{new_game_connection, GameHandler};
+use crate::protocol::game::{new_game_connection, GameHandler, ChatProcessingResult};
 use crate::protocol::game::chat::chat_events;
 use crate::protocol::packets::opcodes::{
     SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_GM_MESSAGECHAT,
@@ -124,8 +124,8 @@ impl GameClient {
                                 }
                                 SMSG_MESSAGECHAT => {
                                     match handler.handle_messagechat(payload)? {
-                                        Some(chat_msg) => {
-                                            // Convert to bridge message
+                                        Some(ChatProcessingResult::Chat(chat_msg)) => {
+                                            // Regular chat message - convert to bridge message
                                             let wow_msg = BridgeMessage {
                                                 sender: Some(chat_msg.sender_name),
                                                 content: chat_msg.content,
@@ -133,6 +133,21 @@ impl GameClient {
                                                 channel_name: chat_msg.channel_name,
                                                 format: chat_msg.format,
                                                 guild_event: None,
+                                            };
+
+                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                                warn!("Failed to send message to bridge: {}", e);
+                                            }
+                                        }
+                                        Some(ChatProcessingResult::GuildEvent(event_data)) => {
+                                            // Send as a guild event BridgeMessage
+                                            let wow_msg = BridgeMessage {
+                                                sender: Some(event_data.player_name.clone()),
+                                                content: String::new(),
+                                                chat_type: chat_events::CHAT_MSG_GUILD,
+                                                channel_name: None,
+                                                format: None,
+                                                guild_event: Some(event_data),
                                             };
 
                                             if let Err(e) = self.channels.wow_tx.send(wow_msg) {

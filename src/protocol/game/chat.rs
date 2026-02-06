@@ -113,6 +113,8 @@ pub struct MessageChat {
     pub message_length: u32,
     pub message: String,
     pub chat_tag: u8,
+    /// Achievement ID for guild achievement messages (read after chat tag).
+    pub achievement_id: Option<u32>,
 }
 
 impl MessageChat {
@@ -126,6 +128,7 @@ impl MessageChat {
             channel_name: self.channel_name.clone(),
             content: self.message.clone(),
             format: None,
+            achievement_id: self.achievement_id,
         }
     }
 
@@ -143,6 +146,7 @@ impl MessageChat {
             channel_name: self.channel_name.clone(),
             content: self.message.clone(),
             format,
+            achievement_id: self.achievement_id,
         }
     }
 }
@@ -211,6 +215,7 @@ impl MessageChat {
                 message_length: 0,
                 message: "is ignoring you".to_string(),
                 chat_tag: 0,
+                achievement_id: None,
             });
         }
 
@@ -278,6 +283,14 @@ impl MessageChat {
             buf.advance(1);
         }
 
+        // For guild achievement messages, read the achievement ID (4 bytes) after chat tag
+        let achievement_id =
+            if chat_type == chat_events::CHAT_MSG_GUILD_ACHIEVEMENT && buf.remaining() >= 4 {
+                Some(buf.get_u32_le())
+            } else {
+                None
+            };
+
         Ok(MessageChat {
             chat_type,
             language,
@@ -287,6 +300,7 @@ impl MessageChat {
             message_length,
             message,
             chat_tag: 0, // Already skipped
+            achievement_id,
         })
     }
 }

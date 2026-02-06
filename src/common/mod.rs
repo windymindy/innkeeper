@@ -8,5 +8,8 @@ pub mod types;
 // Re-export message types from messages module
 pub use messages::{BridgeCommand, BridgeMessage, DiscordMessage, GuildEventInfo};
 
+// Re-export achievement functions from resources
+pub use resources::{get_achievement_name, get_achievements};
+
 // BridgeChannels is now in the bridge module
 pub use crate::bridge::BridgeChannels;

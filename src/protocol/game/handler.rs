@@ -8,6 +8,13 @@ use tracing::{debug, error, info, warn};
 
 use crate::common::messages::GuildEventInfo;
 use crate::common::types::{ChatMessage, GuildEvent, GuildInfo, GuildMember, Player};
+
+/// Result of processing a chat message.
+#[derive(Debug, Clone)]
+pub enum ChatProcessingResult {
+    Chat(ChatMessage),
+    GuildEvent(GuildEventInfo),
+}
 use crate::protocol::game::chat::{
     get_language_for_race, ChannelNotify, ChatPlayerNotFound, JoinChannelWotLK, MessageChat,
     NameQuery, NameQueryResponse, SendChatMessage,
@@ -184,7 +191,10 @@ impl GameHandler {
     // =========================================================================
 
     /// Handle SMSG_MESSAGECHAT packet.
-    pub fn handle_messagechat(&mut self, mut payload: Bytes) -> Result<Option<ChatMessage>> {
+    pub fn handle_messagechat(
+        &mut self,
+        mut payload: Bytes,
+    ) -> Result<Option<ChatProcessingResult>> {
         let msg = match MessageChat::decode(&mut payload) {
             Ok(msg) => msg,
             Err(e) if e.to_string().contains("skip") => {
@@ -193,7 +203,32 @@ impl GameHandler {
             Err(e) => return Err(e),
         };
 
-        self.process_chat_message(msg)
+        // Handle Guild Achievements
+        if msg.chat_type == crate::protocol::game::chat::chat_events::CHAT_MSG_GUILD_ACHIEVEMENT {
+            // Look up player name from guild roster
+            if let Some(member) = self.guild_roster.get(&msg.sender_guid) {
+                let player_name = member.name.clone();
+
+                return Ok(Some(ChatProcessingResult::GuildEvent(GuildEventInfo {
+                    event_name: "achievement".to_string(),
+                    player_name,
+                    target_name: None,
+                    rank_name: None,
+                    achievement_id: msg.achievement_id,
+                })));
+            } else {
+                warn!(
+                    guid = %msg.sender_guid,
+                    "Guild achievement from unknown player (not in roster yet)"
+                );
+                return Ok(None);
+            }
+        }
+
+        match self.process_chat_message(msg)? {
+            Some(chat_msg) => Ok(Some(ChatProcessingResult::Chat(chat_msg))),
+            None => Ok(None),
+        }
     }
 
     /// Handle SMSG_NAME_QUERY response.
@@ -421,6 +456,7 @@ impl GameHandler {
             player_name,
             target_name,
             rank_name,
+            achievement_id: None,
         }))
     }
 
@@ -598,6 +634,7 @@ impl GameHandler {
                     channel_name: None,
                     content: msg.message.clone(),
                     format: Some("%user %message.".to_string()),
+                    achievement_id: msg.achievement_id,
                 }));
             }
             // Queue for name resolution if we don't know the name
@@ -609,6 +646,7 @@ impl GameHandler {
                 channel_name: None,
                 content: msg.message.clone(),
                 format: Some("%user %message.".to_string()),
+                achievement_id: msg.achievement_id,
             };
             self.pending_messages
                 .entry(msg.sender_guid)
@@ -632,6 +670,7 @@ impl GameHandler {
                     channel_name: None,
                     content: msg.message.clone(),
                     format: Some("%message.".to_string()),
+                    achievement_id: msg.achievement_id,
                 }));
             }
         }
@@ -685,6 +724,7 @@ impl GameHandler {
             channel_name: None,
             content: String::new(),
             format: Some("No player named '%user' is currently playing.".to_string()),
+            achievement_id: None,
         }))
     }
 }

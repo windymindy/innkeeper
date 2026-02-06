@@ -103,6 +103,8 @@ pub struct ChatMessage {
     pub channel_name: Option<String>,
     pub content: String,
     pub format: Option<String>,
+    /// Achievement ID for guild achievement messages.
+    pub achievement_id: Option<u32>,
 }
 
 /// Guild information.

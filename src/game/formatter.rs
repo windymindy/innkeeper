@@ -56,6 +56,7 @@ impl MessageFormatter {
             .replace("%target", &ctx.target)
             .replace("%channel", &ctx.channel)
             .replace("%rank", &ctx.rank)
+            .replace("%achievement", &ctx.achievement)
     }
 
     /// Get the format string.
@@ -75,6 +76,7 @@ impl MessageFormatter {
             .replace("%target", "")
             .replace("%channel", "")
             .replace("%rank", "")
+            .replace("%achievement", "")
             .len();
 
         max_total.saturating_sub(overhead)
@@ -94,6 +96,8 @@ pub struct FormatContext {
     pub channel: String,
     /// Rank name (for promotion/demotion events).
     pub rank: String,
+    /// Achievement link/name (for achievement events).
+    pub achievement: String,
 }
 
 impl FormatContext {
@@ -105,6 +109,7 @@ impl FormatContext {
             target: String::new(),
             channel: String::new(),
             rank: String::new(),
+            achievement: String::new(),
         }
     }
 
@@ -123,6 +128,12 @@ impl FormatContext {
     /// Set the rank.
     pub fn with_rank(mut self, rank: impl Into<String>) -> Self {
         self.rank = rank.into();
+        self
+    }
+
+    /// Set the achievement.
+    pub fn with_achievement(mut self, achievement: impl Into<String>) -> Self {
+        self.achievement = achievement.into();
         self
     }
 

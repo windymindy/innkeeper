@@ -7,11 +7,9 @@ use emojis;
 use fancy_regex::Regex;
 use serenity::cache::Cache;
 use serenity::model::id::ChannelId;
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// WotLK/Ascension link site for item/spell lookups.
-const LINK_SITE: &str = "https://db.ascension.gg/";
+use crate::common::resources::{get_achievements, LINK_SITE};
 
 /// Result of resolving tags in a message.
 #[derive(Debug, Clone)]
@@ -20,31 +18,6 @@ pub struct TagResolutionResult {
     pub message: String,
     /// Any errors that occurred during tag resolution.
     pub errors: Vec<String>,
-}
-
-/// Achievement database loaded from achievements.csv.
-static ACHIEVEMENTS: OnceLock<HashMap<u32, String>> = OnceLock::new();
-
-/// Load achievements from embedded CSV data.
-fn load_achievements() -> HashMap<u32, String> {
-    // Embedded achievements.csv content (from wowchat_ascension)
-    // We include the most common achievements inline for zero-dependency usage
-    let csv_data = include_str!("../../resources/achievements.csv");
-
-    csv_data
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(2, ',');
-            let id = parts.next()?.parse::<u32>().ok()?;
-            let name = parts.next()?.to_string();
-            Some((id, name))
-        })
-        .collect()
-}
-
-/// Get the achievements database, loading it if necessary.
-pub fn get_achievements() -> &'static HashMap<u32, String> {
-    ACHIEVEMENTS.get_or_init(load_achievements)
 }
 
 /// Message resolver for WoW <-> Discord message translation.
@@ -397,16 +370,13 @@ impl MessageResolver {
     ///
     /// Looks up the achievement name from the achievements database and formats
     /// a clickable link for Discord.
-    pub fn resolve_achievement_id(&self, achievement_id: u32) -> String {
+    pub fn resolve_achievement_id(achievement_id: u32) -> String {
         let achievements = get_achievements();
         let name = achievements
             .get(&achievement_id)
             .map(|s| s.as_str())
             .unwrap_or_else(|| "Unknown Achievement");
-        format!(
-            "[{}] (<{}?achievement={}>) ",
-            name, LINK_SITE, achievement_id
-        )
+        format!("[{}] (<{}?achievement={}>)", name, LINK_SITE, achievement_id)
     }
 
     /// Resolve @tags in a message to Discord mentions.
@@ -815,16 +785,14 @@ mod tests {
 
     #[test]
     fn test_resolve_achievement_id() {
-        let resolver = MessageResolver::new();
-
         // Test known achievement (Level 10 = ID 6)
-        let output = resolver.resolve_achievement_id(6);
+        let output = MessageResolver::resolve_achievement_id(6);
         assert!(output.contains("Level 10"));
         assert!(output.contains("db.ascension.gg"));
         assert!(output.contains("achievement=6"));
 
         // Test unknown achievement
-        let output = resolver.resolve_achievement_id(999999999);
+        let output = MessageResolver::resolve_achievement_id(999999999);
         assert!(output.contains("Unknown Achievement"));
     }
 
@@ -897,18 +865,6 @@ mod tests {
         // Mentions should be preserved
         assert!(output.contains("<@123456>"));
         assert!(output.contains("<@&789012>"));
-    }
-
-    #[test]
-    fn test_get_achievements_loads() {
-        let achievements = get_achievements();
-
-        // Should have loaded at least some achievements
-        assert!(!achievements.is_empty());
-
-        // Check for known achievement
-        assert!(achievements.contains_key(&6)); // Level 10
-        assert_eq!(achievements.get(&6), Some(&"Level 10".to_string()));
     }
 
     #[test]

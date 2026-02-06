@@ -12,8 +12,7 @@ The local copy of the original repository is located in the ../wowchat_ascension
 
 ### Before Implementation
 1. Read `documentation/001_design.md` for full architecture
-2. Check `documentation/002_plan.md` for current progress
-3. Reference Scala source files when implementing Rust equivalents
+2. Reference Scala source files when implementing Rust equivalents
 
 ## Resources
 

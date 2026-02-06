@@ -1,5 +1,11 @@
 //! Game resources: zone names, class names, race names, etc.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Link site for item/spell/quest/achievement links.
+pub const LINK_SITE: &str = "https://db.ascension.gg";
+
 /// WoW character classes (WotLK/Ascension).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -116,5 +122,64 @@ impl Race {
             // Alliance races speak Common
             _ => 7, // LANG_COMMON
         }
+    }
+}
+
+// ============================================================================
+// Achievement Database
+// ============================================================================
+
+/// Achievement database loaded from achievements.csv.
+static ACHIEVEMENTS: OnceLock<HashMap<u32, String>> = OnceLock::new();
+
+/// Load achievements from embedded CSV data.
+fn load_achievements() -> HashMap<u32, String> {
+    // Embedded achievements.csv content (from wowchat_ascension)
+    let csv_data = include_str!("../../resources/achievements.csv");
+
+    csv_data
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, ',');
+            let id = parts.next()?.parse::<u32>().ok()?;
+            let name = parts.next()?.to_string();
+            Some((id, name))
+        })
+        .collect()
+}
+
+/// Get the achievements database, loading it if necessary.
+pub fn get_achievements() -> &'static HashMap<u32, String> {
+    ACHIEVEMENTS.get_or_init(load_achievements)
+}
+
+/// Get an achievement name by ID.
+pub fn get_achievement_name(id: u32) -> Option<&'static str> {
+    get_achievements().get(&id).map(|s: &String| s.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_achievements_loads() {
+        let achievements = get_achievements();
+
+        // Should have loaded at least some achievements
+        assert!(!achievements.is_empty());
+
+        // Check for known achievement
+        assert!(achievements.contains_key(&6)); // Level 10
+        assert_eq!(achievements.get(&6), Some(&"Level 10".to_string()));
+    }
+
+    #[test]
+    fn test_get_achievement_name() {
+        // Test known achievement
+        assert_eq!(get_achievement_name(6), Some("Level 10"));
+
+        // Test unknown achievement
+        assert_eq!(get_achievement_name(999999999), None);
     }
 }

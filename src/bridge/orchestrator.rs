@@ -12,6 +12,7 @@ use crate::common::types::ChatType;
 use crate::common::{BridgeMessage, DiscordMessage};
 use crate::config::types::{ChannelMapping, ChatConfig, Config, FiltersConfig, WowChannelConfig};
 use crate::game::formatter::{split_message, FormatContext, MessageFormatter};
+use crate::discord::resolver::MessageResolver;
 
 use super::filter::{FilterDirection, MessageFilter};
 
@@ -300,9 +301,18 @@ impl Bridge {
                 .as_ref()
                 .and_then(|e| e.rank_name.as_deref())
                 .unwrap_or("");
+            let achievement = guild_event
+                .as_ref()
+                .and_then(|e| e.achievement_id)
+                .map(|id| {
+                    MessageResolver::resolve_achievement_id(id)
+                })
+                .unwrap_or_default();
+
             let ctx = FormatContext::new(sender.unwrap_or(""), content)
                 .with_target(target)
-                .with_rank(rank);
+                .with_rank(rank)
+                .with_achievement(achievement);
             let formatted = formatter.format(&ctx);
 
             // Apply global filter first, then per-channel filter

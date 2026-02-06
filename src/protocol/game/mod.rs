@@ -8,4 +8,4 @@ pub mod header;
 pub mod packets;
 
 pub use connector::new_game_connection;
-pub use handler::GameHandler;
+pub use handler::{ChatProcessingResult, GameHandler};

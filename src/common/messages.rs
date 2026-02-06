@@ -14,6 +14,8 @@ pub struct GuildEventInfo {
     pub target_name: Option<String>,
     /// The rank name (for promotion/demotion events).
     pub rank_name: Option<String>,
+    /// The achievement ID (for achievement events).
+    pub achievement_id: Option<u32>,
 }
 
 /// Bridge message for Discord <-> WoW communication.
