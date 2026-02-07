@@ -31,17 +31,19 @@ pub struct MessageResolver {
     color_end_pattern: Regex,
     /// Pattern for texture coding.
     texture_pattern: Regex,
+    /// Whether to enable markdown (disable escaping).
+    enable_markdown: bool,
 }
 
 impl Default for MessageResolver {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl MessageResolver {
     /// Create a new message resolver with WotLK/Ascension patterns.
-    pub fn new() -> Self {
+    pub fn new(enable_markdown: bool) -> Self {
         Self {
             link_patterns: vec![
                 (
@@ -71,6 +73,7 @@ impl MessageResolver {
             color_pattern: Regex::new(r"\|c[0-9a-fA-F]{8}(.*?)\|r").unwrap(),
             color_end_pattern: Regex::new(r"\|c[0-9a-fA-F]{8}").unwrap(),
             texture_pattern: Regex::new(r"\|T(.*?)\|t").unwrap(),
+            enable_markdown,
         }
     }
 
@@ -193,6 +196,9 @@ impl MessageResolver {
 
     /// Escape Discord markdown special characters.
     pub fn escape_discord_markdown(&self, message: &str) -> String {
+        if self.enable_markdown {
+            return message.to_string();
+        }
         message
             .replace('`', "\\`")
             .replace('*', "\\*")
@@ -376,7 +382,10 @@ impl MessageResolver {
             .get(&achievement_id)
             .map(|s| s.as_str())
             .unwrap_or_else(|| "Unknown Achievement");
-        format!("[{}] (<{}?achievement={}>)", name, LINK_SITE, achievement_id)
+        format!(
+            "[{}] (<{}?achievement={}>)",
+            name, LINK_SITE, achievement_id
+        )
     }
 
     /// Resolve @tags in a message to Discord mentions.
@@ -644,6 +653,9 @@ impl MessageResolver {
 
     /// Escape Discord markdown but preserve Discord mention syntax.
     fn escape_discord_markdown_preserve_mentions(&self, message: &str) -> String {
+        if self.enable_markdown {
+            return message.to_string();
+        }
         // We need to escape markdown but NOT the <@id> or <@&id> mentions
         static MENTION_PLACEHOLDER: OnceLock<Regex> = OnceLock::new();
         let mention_pattern =
@@ -692,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_strip_color_coding() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let input = "|cff00ff00Green Text|r normal";
         let output = resolver.strip_color_coding(input);
@@ -701,7 +713,7 @@ mod tests {
 
     #[test]
     fn test_strip_texture_coding() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let input = "Hello |TInterface\\Icons\\spell.blp:0|t World";
         let output = resolver.strip_texture_coding(input);
@@ -710,7 +722,7 @@ mod tests {
 
     #[test]
     fn test_resolve_links() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let input = "|cff0070dd|Hitem:12345:0:0:0:0:0:0:0|h[Cool Sword]|h|r dropped!";
         let output = resolver.resolve_links(input);
@@ -720,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_escape_markdown() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let input = "**bold** _italic_ `code`";
         let output = resolver.escape_discord_markdown(input);
@@ -729,7 +741,7 @@ mod tests {
 
     #[test]
     fn test_resolve_custom_emojis_to_text() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let input = "Hello <:pepega:123456789> world <a:animated:987654321>";
         let output = resolver.resolve_custom_emojis_to_text(input);
@@ -738,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_resolve_unicode_emojis() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         // Basic emoji conversion (😀 = grinning face)
         let input = "Hello 😀 world";
@@ -798,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_tag_matcher_exact_match() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let names = vec![
             ("John".to_string(), "123".to_string()),
@@ -815,7 +827,7 @@ mod tests {
 
     #[test]
     fn test_tag_matcher_partial_match() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let names = vec![
             ("Alice Smith".to_string(), "123".to_string()),
@@ -830,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_tag_matcher_role_prefix() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let names = vec![("Moderator".to_string(), "123".to_string())];
 
@@ -842,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_tag_matcher_skip_here() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let names = vec![("here".to_string(), "123".to_string())];
 
@@ -853,7 +865,7 @@ mod tests {
 
     #[test]
     fn test_escape_markdown_preserve_mentions() {
-        let resolver = MessageResolver::new();
+        let resolver = MessageResolver::new(false);
 
         let input = "**bold** <@123456> text _italic_ <@&789012> more";
         let output = resolver.escape_discord_markdown_preserve_mentions(input);
@@ -873,5 +885,14 @@ mod tests {
         assert_eq!(emojis::get_by_shortcode("smile").unwrap().as_str(), "😄");
         assert_eq!(emojis::get_by_shortcode("grinning").unwrap().as_str(), "😀");
         assert_eq!(emojis::get_by_shortcode("+1").unwrap().as_str(), "👍");
+    }
+
+    #[test]
+    fn test_escape_markdown_enabled() {
+        let resolver = MessageResolver::new(true);
+
+        let input = "**bold** _italic_ `code`";
+        let output = resolver.escape_discord_markdown(input);
+        assert_eq!(output, input); // Should not change
     }
 }

@@ -131,7 +131,7 @@ impl DiscordBotBuilder {
             discord_to_wow: std::collections::HashMap::new(),
             wow_tx: self.channels.outgoing_wow_tx.clone(),
             command_tx: self.channels.command_tx.clone(),
-            resolver: MessageResolver::new(),
+            resolver: MessageResolver::new(self.config.discord.enable_markdown),
             pending_channel_configs: pending_configs,
             enable_dot_commands: self.config.discord.enable_dot_commands,
             dot_commands_whitelist: self.config.discord.dot_commands_whitelist.clone(),

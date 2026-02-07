@@ -452,6 +452,9 @@ pub struct DiscordConfig {
     /// Notify on failed tag/mention resolution
     #[serde(default = "default_enabled", deserialize_with = "bool_or_int")]
     pub enable_tag_failed_notifications: bool,
+    /// Enable markdown in messages sent from WoW to Discord
+    #[serde(default = "default_disabled", deserialize_with = "bool_or_int")]
+    pub enable_markdown: bool,
 }
 
 /// WoW server connection configuration.

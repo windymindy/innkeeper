@@ -60,13 +60,14 @@ impl BridgeState {
         command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
         enable_dot_commands: bool,
         dot_commands_whitelist: Option<Vec<String>>,
+        enable_markdown: bool,
     ) -> Self {
         Self {
             wow_to_discord: HashMap::new(),
             discord_to_wow: HashMap::new(),
             wow_tx,
             command_tx,
-            resolver: MessageResolver::new(),
+            resolver: MessageResolver::new(enable_markdown),
             pending_channel_configs: Vec::new(),
             enable_dot_commands,
             dot_commands_whitelist,
@@ -83,6 +84,7 @@ impl BridgeState {
         command_tx: mpsc::UnboundedSender<crate::discord::commands::WowCommand>,
         enable_dot_commands: bool,
         dot_commands_whitelist: Option<Vec<String>>,
+        enable_markdown: bool,
         enable_tag_failed_notifications: bool,
     ) -> Self {
         Self {
@@ -90,7 +92,7 @@ impl BridgeState {
             discord_to_wow: HashMap::new(),
             wow_tx,
             command_tx,
-            resolver: MessageResolver::new(),
+            resolver: MessageResolver::new(enable_markdown),
             pending_channel_configs: Vec::new(),
             enable_dot_commands,
             dot_commands_whitelist,
@@ -251,7 +253,7 @@ mod tests {
         let (wow_tx, _) = mpsc::unbounded_channel();
         let (cmd_tx, _) = mpsc::unbounded_channel();
 
-        BridgeState::new(wow_tx, cmd_tx, true, None)
+        BridgeState::new(wow_tx, cmd_tx, true, None, false)
     }
 
     #[test]
@@ -270,7 +272,7 @@ mod tests {
         let (cmd_tx, _) = mpsc::unbounded_channel();
 
         let whitelist = Some(vec!["help".to_string(), "guild*".to_string()]);
-        let state = BridgeState::new(wow_tx, cmd_tx, true, whitelist);
+        let state = BridgeState::new(wow_tx, cmd_tx, true, whitelist, false);
 
         assert!(state.should_send_dot_command_directly(".help"));
         assert!(state.should_send_dot_command_directly(".guild"));
@@ -284,7 +286,7 @@ mod tests {
         let (wow_tx, _) = mpsc::unbounded_channel();
         let (cmd_tx, _) = mpsc::unbounded_channel();
 
-        let state = BridgeState::new(wow_tx, cmd_tx, false, None);
+        let state = BridgeState::new(wow_tx, cmd_tx, false, None, false);
 
         assert!(!state.should_send_dot_command_directly(".help"));
         assert!(!state.should_send_dot_command_directly(".anything"));

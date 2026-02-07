@@ -466,6 +466,7 @@ mod tests {
                 dot_commands_whitelist: None,
                 enable_commands_channels: None,
                 enable_tag_failed_notifications: false,
+                enable_markdown: false,
             },
             wow: WowConfig {
                 platform: "Mac".to_string(),
