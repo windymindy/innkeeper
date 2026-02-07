@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     // ============================================================
 
     // Create bridge channels (single source of truth)
-    let (game_channels, wow_rx, command_tx, cmd_response_rx, shutdown_tx) = BridgeChannels::new();
+    let (game_channels, wow_rx, command_tx, cmd_response_rx, shutdown_tx, status_rx) = BridgeChannels::new();
 
     // Clone senders needed for Discord bot
     let outgoing_wow_tx = game_channels.outgoing_wow_tx.clone();
@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
         wow_to_discord_rx,
         command_tx: discord_command_tx.clone(),
         cmd_response_rx,
+        status_rx,
     };
 
     let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels, bridge.clone())

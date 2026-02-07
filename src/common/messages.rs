@@ -76,3 +76,14 @@ pub enum CommandResponseData {
     /// Guild MOTD (!gmotd).
     GuildMotd(Option<String>, Option<String>), // (motd, guild_name)
 }
+
+/// Represents a change in the bot's activity status.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActivityStatus {
+    /// Bot is connecting to the game server.
+    Connecting,
+    /// Bot is connected to a realm.
+    ConnectedToRealm(String),
+    /// Update on guild statistics (online count).
+    GuildStats { online_count: usize },
+}

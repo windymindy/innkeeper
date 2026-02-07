@@ -10,6 +10,9 @@ pub use messages::{
     BridgeCommand, BridgeMessage, CommandResponseData, DiscordMessage, GuildEventInfo,
 };
 
+// Re-export status types
+pub use messages::ActivityStatus;
+
 // Re-export achievement functions from resources
 pub use resources::{get_achievement_name, get_achievements};
 

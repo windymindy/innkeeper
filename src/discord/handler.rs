@@ -35,6 +35,8 @@ pub struct BridgeHandler {
     command_handler: CommandHandler,
     /// Receiver for command responses.
     cmd_response_rx: Arc<Mutex<mpsc::UnboundedReceiver<CommandResponse>>>,
+    /// Receiver for status updates (from GameClient).
+    status_rx: Arc<Mutex<mpsc::UnboundedReceiver<crate::common::ActivityStatus>>>,
 }
 
 impl BridgeHandler {
@@ -42,11 +44,13 @@ impl BridgeHandler {
         wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
         cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
+        status_rx: mpsc::UnboundedReceiver<crate::common::ActivityStatus>,
     ) -> Self {
         Self {
             wow_rx: Arc::new(Mutex::new(wow_rx)),
             command_handler: CommandHandler::new(command_tx),
             cmd_response_rx: Arc::new(Mutex::new(cmd_response_rx)),
+            status_rx: Arc::new(Mutex::new(status_rx)),
         }
     }
 }
@@ -190,6 +194,37 @@ impl EventHandler for BridgeHandler {
                 info!("Pending channels to resolve: {}", state.pending_channel_configs.len());
             }
         }
+
+        // Start status update task
+        let status_rx = Arc::clone(&self.status_rx);
+        let status_ctx = ctx.clone();
+
+        tokio::spawn(async move {
+            let mut rx = status_rx.lock().await;
+
+            while let Some(status) = rx.recv().await {
+                use crate::common::ActivityStatus;
+                use serenity::gateway::ActivityData;
+
+                let activity = match status {
+                    ActivityStatus::Connecting => ActivityData::custom("Connecting..."),
+                    ActivityStatus::ConnectedToRealm(realm) => ActivityData::custom(realm),
+                    ActivityStatus::GuildStats { online_count } => {
+                        let plural = if online_count == 1 { "" } else { "s" };
+                        let text = if online_count == 0 {
+                            "Currently no guildies online".to_string()
+                        } else {
+                            format!("{} guildie{} online", online_count, plural)
+                        };
+                        ActivityData::watching(text)
+                    }
+                };
+
+                status_ctx.set_activity(Some(activity));
+            }
+
+            info!("Status update task ended");
+        });
 
         // Start WoW -> Discord forwarding task
         let wow_rx = Arc::clone(&self.wow_rx);

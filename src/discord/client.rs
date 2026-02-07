@@ -14,7 +14,7 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState, ChannelConfig};
-use crate::common::BridgeMessage;
+use crate::common::{ActivityStatus, BridgeMessage};
 use crate::config::types::Config;
 use crate::bridge::orchestrator::parse_channel_config;
 use crate::discord::commands::CommandResponse;
@@ -33,6 +33,8 @@ pub struct DiscordChannels {
     pub command_tx: mpsc::UnboundedSender<WowCommand>,
     /// Receiver for command responses from game client.
     pub cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
+    /// Receiver for status updates from game client.
+    pub status_rx: mpsc::UnboundedReceiver<ActivityStatus>,
 }
 
 /// Shared state that persists across reconnections.
@@ -54,8 +56,9 @@ impl ClientConfig {
         wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
         cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
+        status_rx: mpsc::UnboundedReceiver<ActivityStatus>,
     ) -> anyhow::Result<Client> {
-        let handler = BridgeHandler::new(wow_rx, command_tx, cmd_response_rx);
+        let handler = BridgeHandler::new(wow_rx, command_tx, cmd_response_rx, status_rx);
 
         let client = Client::builder(&self.token, self.intents)
             .event_handler(handler)
@@ -162,6 +165,7 @@ impl DiscordBotBuilder {
             self.channels.wow_to_discord_rx,
             self.channels.command_tx.clone(),
             self.channels.cmd_response_rx,
+            self.channels.status_rx,
         );
 
         let client = Client::builder(&client_config.token, client_config.intents)
@@ -237,7 +241,10 @@ impl DiscordBot {
                     // (command responses during reconnection will be lost)
                     let (_dummy_cmd_tx, dummy_cmd_rx) = mpsc::unbounded_channel::<CommandResponse>();
 
-                    match self.config.build_client(new_wow_rx, self.command_tx.clone(), dummy_cmd_rx).await {
+                    // Create a dummy status channel for reconnection (status updates lost during reconnect)
+                    let (_dummy_status_tx, dummy_status_rx) = mpsc::unbounded_channel::<ActivityStatus>();
+
+                    match self.config.build_client(new_wow_rx, self.command_tx.clone(), dummy_cmd_rx, dummy_status_rx).await {
                         Ok(client) => {
                             // Update HTTP reference
                             self.http = client.http.clone();

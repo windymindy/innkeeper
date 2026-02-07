@@ -34,6 +34,7 @@ pub struct GameHandler {
     account: String,
     session_key: [u8; 40],
     realm_id: u32,
+    pub character_name: String,
     pub player: Option<Player>,
     pub self_guid: Option<u64>,
     pub guild_id: u32,
@@ -56,11 +57,12 @@ pub struct GameHandler {
 }
 
 impl GameHandler {
-    pub fn new(account: &str, session_key: [u8; 40], realm_id: u32) -> Self {
+    pub fn new(account: &str, session_key: [u8; 40], realm_id: u32, character_name: &str) -> Self {
         Self {
             account: account.to_string(),
             session_key,
             realm_id,
+            character_name: character_name.to_string(),
             player: None,
             self_guid: None,
             guild_id: 0,
@@ -146,6 +148,17 @@ impl GameHandler {
                 self.self_guid = Some(char_info.guid);
                 self.guild_id = char_info.guild_id;
                 self.language_id = get_language_for_race(char_info.race);
+
+                // Populate self.player
+                self.player = Some(crate::common::types::Player {
+                    guid: char_info.guid,
+                    name: char_info.name.clone(),
+                    level: char_info.level,
+                    class: crate::common::resources::Class::from_id(char_info.class),
+                    race: crate::common::resources::Race::from_id(char_info.race),
+                    zone_id: char_info.zone_id,
+                });
+
                 return Some(char_info);
             }
         }
@@ -472,26 +485,18 @@ impl GameHandler {
 
     /// Get count of online guildies (excluding self).
     pub fn get_online_guildies_count(&self) -> usize {
-        let self_name = self.player.as_ref().map(|p| p.name.as_str());
-
         self.guild_roster
             .values()
-            .filter(|m| {
-                m.online && self_name.map_or(true, |name| !m.name.eq_ignore_ascii_case(name))
-            })
+            .filter(|m| m.online && !m.name.eq_ignore_ascii_case(&self.character_name))
             .count()
     }
 
     /// Get formatted list of online guildies.
     pub fn get_online_guildies(&self) -> Vec<GuildMember> {
-        let self_name = self.player.as_ref().map(|p| p.name.as_str());
-
         let mut online: Vec<_> = self
             .guild_roster
             .values()
-            .filter(|m| {
-                m.online && self_name.map_or(true, |name| !m.name.eq_ignore_ascii_case(name))
-            })
+            .filter(|m| m.online && !m.name.eq_ignore_ascii_case(&self.character_name))
             .cloned()
             .collect();
 

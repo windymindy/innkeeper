@@ -5,7 +5,7 @@
 
 use tokio::sync::{mpsc, watch};
 
-use crate::common::{BridgeCommand, BridgeMessage};
+use crate::common::{ActivityStatus, BridgeCommand, BridgeMessage};
 use crate::discord::commands::CommandResponse;
 
 /// Channels for bridge communication.
@@ -25,6 +25,8 @@ pub struct BridgeChannels {
     pub command_response_tx: mpsc::UnboundedSender<CommandResponse>,
     /// Receiver for shutdown signal (game handler listens).
     pub shutdown_rx: watch::Receiver<bool>,
+    /// Sender for status updates (Game -> Discord).
+    pub status_tx: mpsc::UnboundedSender<ActivityStatus>,
 }
 
 impl BridgeChannels {
@@ -35,18 +37,21 @@ impl BridgeChannels {
     /// - command_tx: Sender for commands (Discord sends commands here)
     /// - command_response_rx: Receiver for command responses
     /// - shutdown_tx: Sender for shutdown signal (trigger graceful logout)
+    /// - status_rx: Receiver for status updates
     pub fn new() -> (
         Self,
         mpsc::UnboundedReceiver<BridgeMessage>,
         mpsc::UnboundedSender<BridgeCommand>,
         mpsc::UnboundedReceiver<CommandResponse>,
         watch::Sender<bool>,
+        mpsc::UnboundedReceiver<ActivityStatus>,
     ) {
         let (wow_tx, wow_rx) = mpsc::unbounded_channel();
         let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (status_tx, status_rx) = mpsc::unbounded_channel();
 
         let channels = Self {
             wow_tx,
@@ -55,6 +60,7 @@ impl BridgeChannels {
             command_rx,
             command_response_tx,
             shutdown_rx,
+            status_tx,
         };
 
         (
@@ -63,13 +69,14 @@ impl BridgeChannels {
             command_tx,
             command_response_rx,
             shutdown_tx,
+            status_rx,
         )
     }
 }
 
 impl Default for BridgeChannels {
     fn default() -> Self {
-        let (channels, _, _, _, _) = Self::new();
+        let (channels, _, _, _, _, _) = Self::new();
         channels
     }
 }

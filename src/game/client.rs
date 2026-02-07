@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 
 use tracing::{debug, info, warn};
 
-use crate::common::{BridgeChannels, BridgeCommand, BridgeMessage, CommandResponseData};
+use crate::common::{ActivityStatus, BridgeChannels, BridgeCommand, BridgeMessage, CommandResponseData};
 use crate::config::types::Config;
 use crate::discord::commands::CommandResponse;
 
@@ -55,11 +55,17 @@ impl GameClient {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
+        // Send connecting status
+        if let Err(e) = self.channels.status_tx.send(ActivityStatus::Connecting) {
+            warn!("Failed to send connecting status: {}", e);
+        }
+
         let mut connection = new_game_connection(stream);
         let mut handler = GameHandler::new(
             &self.config.wow.account,
             self.session.session_key,
             self.session.realm.id as u32,
+            &self.config.wow.character,
         );
         let mut shutdown_rx = self.channels.shutdown_rx.clone();
 
@@ -106,6 +112,11 @@ impl GameClient {
                                     handler.handle_login_verify_world(verify)?;
                                     info!("In world! Starting ping loop and requesting guild info");
                                     
+                                    // Send realm status update
+                                    if let Err(e) = self.channels.status_tx.send(ActivityStatus::ConnectedToRealm(self.config.wow.realm.clone())) {
+                                        warn!("Failed to send realm status: {}", e);
+                                    }
+
                                     // Request guild info if in a guild
                                     if handler.guild_id > 0 {
                                         let guild_query = handler.build_guild_query(handler.guild_id);
@@ -193,6 +204,12 @@ impl GameClient {
                                 SMSG_GUILD_ROSTER => {
                                     handler.handle_guild_roster(payload)?;
                                     info!("Guild roster loaded: {} members", handler.guild_roster.len());
+
+                                    // Send guild stats update
+                                    let online_count = handler.get_online_guildies_count();
+                                    if let Err(e) = self.channels.status_tx.send(ActivityStatus::GuildStats { online_count }) {
+                                        warn!("Failed to send guild stats status: {}", e);
+                                    }
                                 }
                                 SMSG_GUILD_EVENT => {
                                     if let Some(event_data) = handler.handle_guild_event(payload)? {
@@ -507,7 +524,7 @@ mod tests {
     async fn test_auth_flow() {
         let config = make_test_config();
         let session = make_test_session();
-        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx, _shutdown_tx) = BridgeChannels::new();
+        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx, _shutdown_tx, _status_tx) = BridgeChannels::new();
         let mut client = GameClient::new(config, session, channels, Vec::new());
 
         let (client_stream, mut server_stream) = tokio::io::duplex(4096);
