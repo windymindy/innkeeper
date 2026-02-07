@@ -23,11 +23,12 @@ use crate::protocol::game::guild::{
     GuildEventPacket, GuildQuery, GuildQueryResponse, GuildRoster, GuildRosterRequest,
 };
 use crate::protocol::game::packets::{
-    AuthChallenge, AuthResponse, AuthSession, CharEnum, CharEnumRequest, CharacterInfo,
-    LoginVerifyWorld, Ping, PlayerLogin, Pong,
+    AuthChallenge, AuthResponse, AuthSession, CharEnum, CharEnumRequest, CharacterInfo, GameObjUse,
+    InitWorldStates, LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 use crate::protocol::packets::PacketDecode;
 use anyhow::Result;
+use bytes::Buf;
 
 /// Game protocol handler state.
 pub struct GameHandler {
@@ -54,6 +55,11 @@ pub struct GameHandler {
     pub player_names: HashMap<u64, Player>,
     /// Pending chat messages waiting for name resolution
     pub pending_messages: HashMap<u64, Vec<ChatMessage>>,
+
+    /// Sit quirk state
+    pub tried_to_sit: bool,
+    /// Last known world position (x, y, z)
+    pub world_position: Option<(f32, f32, f32)>,
 }
 
 impl GameHandler {
@@ -74,6 +80,8 @@ impl GameHandler {
             last_roster_request: None,
             player_names: HashMap::new(),
             pending_messages: HashMap::new(),
+            tried_to_sit: false,
+            world_position: None,
         }
     }
 
@@ -718,4 +726,271 @@ impl GameHandler {
             achievement_id: None,
         }))
     }
+
+    /// Handle SMSG_INIT_WORLD_STATES.
+    pub fn handle_init_world_states(&mut self) {
+        // Reset the tried_to_sit flag so we can try sitting again in this session/zone
+        self.tried_to_sit = false;
+        debug!("Reset sit flag (SMSG_INIT_WORLD_STATES)");
+    }
+
+    /// Build CMSG_GAMEOBJ_USE packet.
+    pub fn build_gameobj_use(&self, guid: u64) -> GameObjUse {
+        GameObjUse { guid }
+    }
+
+    /// Handle SMSG_UPDATE_OBJECT.
+    /// Returns Some(guid) if we should interact with an object (sit on chair).
+    pub fn handle_update_object(
+        &mut self,
+        mut payload: Bytes,
+        sit_enabled: bool,
+    ) -> Result<Option<u64>> {
+        if !sit_enabled || self.tried_to_sit {
+            return Ok(None);
+        }
+
+        let block_count = payload.get_u32_le();
+        let mut closest_chair_guid = None;
+        let mut min_distance_sq = f32::MAX;
+
+        for _ in 0..block_count {
+            if payload.remaining() < 1 {
+                break;
+            }
+            let block_type = payload.get_u8();
+
+            match block_type {
+                0 => {
+                    // UPDATETYPE_VALUES
+                    let _guid = unpack_guid(&mut payload)?;
+                    self.parse_update_fields(&mut payload)?;
+                }
+                1 => {
+                    // UPDATETYPE_MOVEMENT
+                    let _guid = unpack_guid(&mut payload)?;
+                    self.parse_movement(&mut payload)?;
+                }
+                2 | 3 => {
+                    // UPDATETYPE_CREATE_OBJECT, UPDATETYPE_CREATE_OBJECT2
+                    let guid = unpack_guid(&mut payload)?;
+                    let obj_type = payload.get_u8();
+                    let movement = self.parse_movement(&mut payload)?;
+                    self.parse_update_fields(&mut payload)?;
+
+                    // Check for self update
+                    if (movement.flags & 0x1) == 0x1 {
+                        // UPDATEFLAG_SELF
+                        self.world_position = Some((movement.x, movement.y, movement.z));
+                    }
+
+                    // Check for chair
+                    // GAMEOBJECT_TYPE_GENERIC, GAMEOBJECT_TYPE_CHAIR
+                    if obj_type == 5 || obj_type == 7 {
+                        if let Some((px, py, pz)) = self.world_position {
+                            if close_to(movement.x, px, 2.0)
+                                && close_to(movement.y, py, 2.0)
+                                && close_to(movement.z, pz, 2.0)
+                            {
+                                // Calculate distance squared to find the closest one
+                                let dx = movement.x - px;
+                                let dy = movement.y - py;
+                                let dz = movement.z - pz;
+                                let dist_sq = dx * dx + dy * dy + dz * dz;
+
+                                if dist_sq < min_distance_sq {
+                                    min_distance_sq = dist_sq;
+                                    closest_chair_guid = Some(guid);
+                                    debug!(
+                                        "Found closer chair (dist_sq={}) at {},{},{}",
+                                        dist_sq, movement.x, movement.y, movement.z
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                4 | 5 => {
+                    // UPDATETYPE_OUT_OF_RANGE_OBJECTS, UPDATETYPE_NEAR_OBJECTS
+                    let count = payload.get_u32_le();
+                    for _ in 0..count {
+                        unpack_guid(&mut payload)?;
+                    }
+                }
+                _ => {
+                    return Ok(None);
+                }
+            }
+        }
+
+        if let Some(guid) = closest_chair_guid {
+            self.tried_to_sit = true;
+            Ok(Some(guid))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn parse_update_fields(&self, buf: &mut Bytes) -> Result<()> {
+        if buf.remaining() < 1 {
+            return Ok(());
+        }
+        let count = buf.get_u8();
+        let mut counts = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            counts.push(buf.get_u32_le());
+        }
+
+        for c in counts {
+            // skip 4 bytes for each set bit
+            let set_bits = c.count_ones();
+            buf.advance((set_bits * 4) as usize);
+        }
+        Ok(())
+    }
+
+    fn parse_movement(&self, buf: &mut Bytes) -> Result<Movement> {
+        // Scala: parseWorldObjectUpdateMovement
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut z = 0.0;
+
+        let flags = buf.get_u16_le(); // readChar.reverseBytes = LE
+
+        if (flags & 0x20) == 0x20 {
+            // UPDATEFLAG_LIVING
+            let flags2 = buf.get_u32_le(); // flags_
+            let _flags3 = buf.get_u16_le(); // flags__ (readChar.reverseBytes)
+            buf.advance(4); // time?
+
+            x = buf.get_f32_le();
+            y = buf.get_f32_le();
+            z = buf.get_f32_le();
+            buf.advance(4); // o
+
+            if (flags2 & 0x200) == 0x200 {
+                // MOVEMENTFLAG_ONTRANSPORT
+                unpack_guid(buf)?;
+                buf.advance(4 * 4);
+                buf.advance(4);
+                buf.advance(1);
+                if (_flags3 & 0x400) == 0x400 {
+                    buf.advance(4);
+                }
+            }
+
+            if (flags2 & 0x200000) == 0x200000 // MOVEMENTFLAG_SWIMMING
+                || (flags2 & 0x2000000) == 0x2000000
+                // MOVEMENTFLAG_FLYING
+                || (_flags3 & 0x20) == 0x20
+            {
+                buf.advance(4);
+            }
+
+            buf.advance(4); // timestamp?
+
+            if (flags2 & 0x1000) == 0x1000 {
+                // MOVEMENTFLAG_FALLING
+                buf.advance(4 * 4);
+            }
+
+            if (flags2 & 0x4000000) == 0x4000000 {
+                // MOVEMENTFLAG_SPLINE_ELEVATION
+                buf.advance(4);
+            }
+
+            buf.advance(9 * 4); // speeds
+
+            if (flags2 & 0x8000000) == 0x8000000 {
+                // MOVEMENTFLAG_SPLINE_ENABLED
+                let flags_spline = buf.get_u32_le();
+                if (flags_spline & 0x20000) == 0x20000 {
+                    buf.advance(4);
+                }
+                if (flags_spline & 0x10000) == 0x10000 {
+                    buf.advance(8);
+                }
+                if (flags_spline & 0x8000) == 0x8000 {
+                    buf.advance(3 * 4);
+                }
+                buf.advance(3 * 4);
+                buf.advance(2 * 4);
+                buf.advance(2 * 4);
+                let splines = buf.get_u32_le();
+                for _ in 0..splines {
+                    buf.advance(3 * 4);
+                }
+                buf.advance(1);
+                buf.advance(3 * 4);
+            }
+        } else {
+            if (flags & 0x100) == 0x100 {
+                // UPDATEFLAG_POSITION
+                unpack_guid(buf)?;
+                x = buf.get_f32_le();
+                y = buf.get_f32_le();
+                z = buf.get_f32_le();
+                buf.advance(4 * 4);
+                buf.advance(4);
+            } else if (flags & 0x40) == 0x40 {
+                // UPDATEFLAG_STATIONARY_POSITION
+                x = buf.get_f32_le();
+                y = buf.get_f32_le();
+                z = buf.get_f32_le();
+                buf.advance(4);
+            }
+        }
+
+        if (flags & 0x8) == 0x8 {
+            // UPDATEFLAG_HIGHGUID
+            buf.advance(4);
+        }
+        if (flags & 0x10) == 0x10 {
+            // UPDATEFLAG_LOWGUID
+            buf.advance(4);
+        }
+        if (flags & 0x4) == 0x4 {
+            // UPDATEFLAG_HAS_TARGET
+            unpack_guid(buf)?;
+        }
+        if (flags & 0x2) == 0x2 {
+            // UPDATEFLAG_TRANSPORT
+            buf.advance(4);
+        }
+        if (flags & 0x80) == 0x80 {
+            // UPDATEFLAG_VEHICLE
+            buf.advance(2 * 4);
+        }
+        if (flags & 0x200) == 0x200 {
+            // UPDATEFLAG_ROTATION
+            buf.advance(8);
+        }
+
+        Ok(Movement { flags, x, y, z })
+    }
+}
+
+struct Movement {
+    flags: u16,
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+fn close_to(x: f32, y: f32, precision: f32) -> bool {
+    (x - y).abs() < precision
+}
+
+fn unpack_guid(buf: &mut Bytes) -> Result<u64> {
+    let mask = buf.get_u8();
+    let mut guid: u64 = 0;
+
+    for i in 0..8 {
+        if (mask & (1 << i)) != 0 {
+            let byte = buf.get_u8();
+            guid |= (byte as u64) << (i * 8);
+        }
+    }
+
+    Ok(guid)
 }

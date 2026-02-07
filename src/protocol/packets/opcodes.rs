@@ -152,8 +152,11 @@ pub const CMSG_WARDEN_DATA: u16 = 0x02E7;
 
 // --- Miscellaneous ---
 pub const SMSG_INVALIDATE_PLAYER: u16 = 0x031C;
+pub const SMSG_INIT_WORLD_STATES: u16 = 0x02C2;
 pub const SMSG_UPDATE_OBJECT: u16 = 0x00A9;
 pub const SMSG_COMPRESSED_UPDATE_OBJECT: u16 = 0x01F6;
+
+pub const CMSG_GAMEOBJ_USE: u16 = 0x00B1;
 
 /// Get a human-readable name for an opcode.
 pub fn opcode_name(opcode: u16) -> &'static str {
@@ -188,6 +191,8 @@ pub fn opcode_name(opcode: u16) -> &'static str {
         SMSG_MOTD => "SMSG_MOTD",
         SMSG_GM_MESSAGECHAT => "SMSG_GM_MESSAGECHAT",
         SMSG_SERVER_MESSAGE => "SMSG_SERVER_MESSAGE",
+        SMSG_INIT_WORLD_STATES => "SMSG_INIT_WORLD_STATES",
+        CMSG_GAMEOBJ_USE => "CMSG_GAMEOBJ_USE",
         _ => "UNKNOWN",
     }
 }

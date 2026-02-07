@@ -414,3 +414,40 @@ impl From<LogoutRequest> for crate::protocol::packets::Packet {
         )
     }
 }
+
+/// SMSG_INIT_WORLD_STATES packet (empty/ignored payload).
+#[derive(Debug, Clone, Default)]
+pub struct InitWorldStates;
+
+impl PacketDecode for InitWorldStates {
+    type Error = anyhow::Error;
+
+    fn decode(_buf: &mut Bytes) -> Result<Self, Self::Error> {
+        // We just need to know it arrived
+        Ok(InitWorldStates)
+    }
+}
+
+/// CMSG_GAMEOBJ_USE packet.
+#[derive(Debug, Clone)]
+pub struct GameObjUse {
+    pub guid: u64,
+}
+
+impl PacketEncode for GameObjUse {
+    fn encode(&self, buf: &mut BytesMut) {
+        buf.put_u64_le(self.guid);
+    }
+}
+
+impl From<GameObjUse> for crate::protocol::packets::Packet {
+    fn from(game_obj_use: GameObjUse) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        game_obj_use.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_GAMEOBJ_USE,
+            buf.freeze(),
+        )
+    }
+}

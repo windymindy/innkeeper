@@ -13,12 +13,12 @@ use crate::protocol::game::{new_game_connection, GameHandler, ChatProcessingResu
 use crate::protocol::game::chat::chat_events;
 use crate::protocol::packets::opcodes::{
     SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_GM_MESSAGECHAT,
-    SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_COMPLETE,
-    SMSG_MESSAGECHAT, SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE,
+    SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_INIT_WORLD_STATES, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_COMPLETE,
+    SMSG_MESSAGECHAT, SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE, SMSG_UPDATE_OBJECT,
 };
 use crate::protocol::packets::PacketDecode;
 use crate::protocol::realm::connector::RealmSession;
-use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, LoginVerifyWorld, Pong};
+use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, InitWorldStates, LoginVerifyWorld, Pong};
 
 pub struct GameClient {
     config: Config,
@@ -361,6 +361,18 @@ impl GameClient {
                                 SMSG_LOGOUT_COMPLETE => {
                                     info!("Logout complete - character logged out gracefully");
                                     return Ok(());
+                                }
+                                SMSG_INIT_WORLD_STATES => {
+                                    let _ = InitWorldStates::decode(&mut payload)?;
+                                    handler.handle_init_world_states();
+                                }
+                                SMSG_UPDATE_OBJECT => {
+                                    // SMSG_UPDATE_OBJECT is handled manually with payload bytes
+                                    if let Ok(Some(guid)) = handler.handle_update_object(payload, self.config.quirks.sit) {
+                                        info!("Found a chair! Sitting on it...");
+                                        let interact = handler.build_gameobj_use(guid);
+                                        connection.send(interact.into()).await?;
+                                    }
                                 }
                                 _ => {
                                     // Ignore unknown packets
