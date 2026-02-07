@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 
 use tracing::{debug, info, warn};
 
-use crate::common::{BridgeChannels, BridgeCommand, BridgeMessage};
+use crate::common::{BridgeChannels, BridgeCommand, BridgeMessage, CommandResponseData};
 use crate::config::types::Config;
 use crate::discord::commands::CommandResponse;
 
@@ -259,18 +259,20 @@ impl GameClient {
                                     }
                                 }
                                 SMSG_MOTD => {
-                                    if let Ok(Some(msg)) = handler.handle_motd(payload) {
-                                        // Send MOTD as system message to Discord
-                                        let wow_msg = BridgeMessage {
-                                            sender: None,
-                                            content: msg,
-                                            chat_type: chat_events::CHAT_MSG_SYSTEM,
-                                            channel_name: None,
-                                            format: None,
-                                            guild_event: None,
-                                        };
-                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                            warn!("Failed to send MOTD to bridge: {}", e);
+                                    if self.config.server_motd_enabled() {
+                                        if let Ok(Some(msg)) = handler.handle_motd(payload) {
+                                            // Send MOTD as system message to Discord
+                                            let wow_msg = BridgeMessage {
+                                                sender: None,
+                                                content: msg,
+                                                chat_type: chat_events::CHAT_MSG_SYSTEM,
+                                                channel_name: None,
+                                                format: None,
+                                                guild_event: None,
+                                            };
+                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                                                warn!("Failed to send MOTD to bridge: {}", e);
+                                            }
                                         }
                                     }
                                 }
@@ -404,30 +406,38 @@ impl GameClient {
                 Some(command) = self.channels.command_rx.recv() => {
                     match command {
                         BridgeCommand::Who { args, reply_channel } => {
-                            let response = if let Some(search_name) = args {
-                                handler.search_guild_member(&search_name)
+                            let content = if let Some(search_name) = args {
+                                let member = handler.search_guild_member(&search_name);
+                                let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
+                                CommandResponseData::WhoSearch(search_name, member, guild_name)
                             } else {
-                                handler.get_online_guildies()
+                                let members = handler.get_online_guildies();
+                                let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
+                                CommandResponseData::WhoList(members, guild_name)
                             };
-                            info!("!who command (channel {}): {}", reply_channel, response);
+
+                            info!("Processed !who command for channel {}", reply_channel);
+
                             // Send response back to Discord
                             let cmd_response = CommandResponse {
                                 channel_id: reply_channel,
-                                content: response,
+                                content,
                             };
                             if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
                                 warn!("Failed to send !who response to bridge: {}", e);
                             }
                         }
                         BridgeCommand::Gmotd { reply_channel } => {
-                            let response = handler.get_guild_motd()
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "No MOTD set.".to_string());
-                            info!("!gmotd command (channel {}): {}", reply_channel, response);
+                            let motd = handler.get_guild_motd().map(|s| s.to_string());
+                            let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
+                            let content = CommandResponseData::GuildMotd(motd, guild_name);
+
+                            info!("Processed !gmotd command for channel {}", reply_channel);
+
                             // Send response back to Discord
                             let cmd_response = CommandResponse {
                                 channel_id: reply_channel,
-                                content: response,
+                                content,
                             };
                             if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
                                 warn!("Failed to send !gmotd response to bridge: {}", e);

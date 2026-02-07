@@ -8,11 +8,12 @@ use std::sync::Arc;
 
 use tracing::{debug, info};
 
-use crate::common::types::ChatType;
-use crate::common::{BridgeMessage, DiscordMessage};
+use crate::common::resources::get_zone_name;
+use crate::common::types::{ChatType, GuildMember};
+use crate::common::{BridgeMessage, CommandResponseData, DiscordMessage};
 use crate::config::types::{ChannelMapping, ChatConfig, Config, FiltersConfig, WowChannelConfig};
-use crate::game::formatter::{split_message, FormatContext, MessageFormatter};
 use crate::discord::resolver::MessageResolver;
+use crate::game::formatter::{split_message, FormatContext, MessageFormatter};
 
 use super::filter::{FilterDirection, MessageFilter};
 
@@ -59,24 +60,6 @@ impl Bridge {
     /// Get the list of custom channels to join in WoW.
     pub fn channels_to_join(&self) -> Vec<&str> {
         self.router.get_channels_to_join()
-    }
-
-    /// Format a command response before sending to Discord.
-    ///
-    /// Applies MOTD formatting if configured and the response appears to be a MOTD.
-    pub fn format_command_response(&self, content: &str) -> String {
-        // Check if MOTD format is configured
-        if let Some(format) = self.config.get_guild_event_format("motd") {
-            // Skip formatting for !who responses (they start with "**" for bold guild name)
-            // or error messages (start with "No ")
-            if !content.starts_with("**") && !content.starts_with("No ") {
-                // This looks like a MOTD response, apply formatting
-                let formatter = MessageFormatter::new(&format);
-                let ctx = FormatContext::new("", content);
-                return formatter.format(&ctx);
-            }
-        }
-        content.to_string()
     }
 
     /// Process a dot command message from Discord and prepare for WoW.
@@ -304,9 +287,7 @@ impl Bridge {
             let achievement = guild_event
                 .as_ref()
                 .and_then(|e| e.achievement_id)
-                .map(|id| {
-                    MessageResolver::resolve_achievement_id(id)
-                })
+                .map(|id| MessageResolver::resolve_achievement_id(id))
                 .unwrap_or_default();
 
             let ctx = FormatContext::new(sender.unwrap_or(""), content)
@@ -356,6 +337,140 @@ impl Bridge {
         }
 
         results
+    }
+
+    /// Format a command response before sending to Discord.
+    pub fn format_command_response(&self, data: &CommandResponseData) -> String {
+        match data {
+            CommandResponseData::String(s) => s.clone(),
+            CommandResponseData::WhoList(members, guild_name) => {
+                self.format_who_list(members, guild_name.as_deref())
+            }
+            CommandResponseData::WhoSearch(name, member, guild_name) => {
+                self.format_who_search(name, member.as_ref(), guild_name.as_deref())
+            }
+            CommandResponseData::GuildMotd(motd, _guild_name) => {
+                self.format_guild_motd(motd.as_deref())
+            }
+        }
+    }
+
+    fn format_who_list(&self, members: &[GuildMember], guild_name: Option<&str>) -> String {
+        if members.is_empty() {
+            return "No guildies online.".to_string();
+        }
+
+        let count = members.len();
+        let header = if let Some(name) = guild_name {
+            format!(
+                "**{}** - {} guildie{} online:",
+                name,
+                count,
+                if count == 1 { "" } else { "s" }
+            )
+        } else {
+            format!(
+                "{} guildie{} online:",
+                count,
+                if count == 1 { "" } else { "s" }
+            )
+        };
+
+        let mut lines = vec![header];
+
+        for m in members {
+            let class_name = m.class.map(|c| c.name()).unwrap_or("Unknown");
+            let zone_name = get_zone_name(m.zone_id);
+            lines.push(format!(
+                "• **{}** (Lvl {} {}) - {}",
+                m.name, m.level, class_name, zone_name
+            ));
+        }
+
+        lines.join("\n")
+    }
+
+    fn format_who_search(
+        &self,
+        player_name: &str,
+        member: Option<&GuildMember>,
+        guild_name: Option<&str>,
+    ) -> String {
+        match member {
+            Some(m) => {
+                let class_name = m.class.map(|c| c.name()).unwrap_or("Unknown");
+                let zone_name = get_zone_name(m.zone_id);
+                let guild_str = guild_name.map(|g| format!(" <{}>", g)).unwrap_or_default();
+
+                if m.online {
+                    format!(
+                        "**{}**{} is a Level {} {} currently in {}.",
+                        m.name, guild_str, m.level, class_name, zone_name
+                    )
+                } else {
+                    let last_seen = self.format_duration(m.last_logoff);
+                    format!(
+                        "**{}**{} is a Level {} {} currently offline. Last seen {} in {}.",
+                        m.name, guild_str, m.level, class_name, last_seen, zone_name
+                    )
+                }
+            }
+            None => format!("Player '{}' not found in.", player_name),
+        }
+    }
+
+    fn format_guild_motd(&self, motd: Option<&str>) -> String {
+        if let Some(m) = motd {
+            if !m.is_empty() {
+                // Apply custom format if configured
+                if let Some(format) = self.config.get_guild_event_format("motd") {
+                    let formatter = MessageFormatter::new(&format);
+                    let ctx = FormatContext::new("", m);
+                    return formatter.format(&ctx);
+                }
+
+                // Default format
+                return format!("Guild Message of the Day:\n{}", m);
+            }
+        }
+        "No guild MOTD set.".to_string()
+    }
+
+    fn format_duration(&self, days: f32) -> String {
+        let total_minutes = (days * 24.0 * 60.0).round() as u64;
+
+        if total_minutes < 1 {
+            return "just now".to_string();
+        }
+
+        let days = total_minutes / (24 * 60);
+        let hours = (total_minutes % (24 * 60)) / 60;
+        let minutes = total_minutes % 60;
+
+        let mut parts = Vec::new();
+        if days > 0 {
+            parts.push(format!("{} day{}", days, if days == 1 { "" } else { "s" }));
+        }
+        if hours > 0 {
+            parts.push(format!(
+                "{} hour{}",
+                hours,
+                if hours == 1 { "" } else { "s" }
+            ));
+        }
+        if minutes > 0 && days == 0 {
+            parts.push(format!(
+                "{} minute{}",
+                minutes,
+                if minutes == 1 { "" } else { "s" }
+            ));
+        }
+
+        if parts.is_empty() {
+            return "just now".to_string();
+        }
+
+        parts.join(", ") + " ago"
     }
 }
 
@@ -942,5 +1057,114 @@ mod tests {
         assert!(result.is_some());
         // Dot commands are sent directly without formatting
         assert_eq!(result.unwrap().content, ".help");
+    }
+}
+
+#[cfg(test)]
+mod formatting_tests {
+    use super::*;
+    use crate::common::types::GuildMember;
+
+    fn make_test_member(name: &str, level: u8, online: bool, last_logoff: f32) -> GuildMember {
+        GuildMember {
+            guid: 0,
+            name: name.to_string(),
+            level,
+            class: None,
+            rank: 0,
+            rank_name: "Member".to_string(),
+            zone_id: 0,
+            online,
+            last_logoff,
+            note: String::new(),
+            officer_note: String::new(),
+        }
+    }
+
+    fn make_bridge() -> Bridge {
+        use crate::config::types::{
+            ChatConfig, Config, DiscordConfig, GuildDashboardConfig, GuildEventsConfig,
+            QuirksConfig, WowConfig,
+        };
+        let config = Config {
+            discord: DiscordConfig {
+                token: "test".to_string(),
+                enable_dot_commands: false,
+                dot_commands_whitelist: None,
+                enable_commands_channels: None,
+                enable_tag_failed_notifications: false,
+            },
+            wow: WowConfig {
+                platform: "Mac".to_string(),
+                enable_server_motd: false,
+                version: "3.3.5".to_string(),
+                realm_build: None,
+                game_build: None,
+                realmlist: "localhost".to_string(),
+                realm: "Test".to_string(),
+                account: "test".to_string(),
+                password: "test".to_string(),
+                character: "TestChar".to_string(),
+            },
+            guild: GuildEventsConfig::default(),
+            chat: ChatConfig::default(),
+            filters: None,
+            guild_dashboard: GuildDashboardConfig::default(),
+            quirks: QuirksConfig::default(),
+        };
+        Bridge::new(&config)
+    }
+
+    #[test]
+    fn test_format_who_list() {
+        let bridge = make_bridge();
+        let members = vec![
+            make_test_member("Alice", 80, true, 0.0),
+            make_test_member("Bob", 75, true, 0.0),
+        ];
+
+        let response = bridge.format_who_list(&members, Some("Test Guild"));
+        assert!(response.contains("Test Guild"));
+        assert!(response.contains("2 guildies online"));
+        assert!(response.contains("Alice"));
+        assert!(response.contains("Bob"));
+    }
+
+    #[test]
+    fn test_format_who_search_found_online() {
+        let bridge = make_bridge();
+        let member = make_test_member("TestPlayer", 80, true, 0.0);
+        let response = bridge.format_who_search("TestPlayer", Some(&member), Some("Cool Guild"));
+        assert!(response.contains("TestPlayer"));
+        assert!(response.contains("Cool Guild"));
+        assert!(response.contains("80"));
+        assert!(response.contains("currently in"));
+    }
+
+    #[test]
+    fn test_format_who_search_found_offline() {
+        let bridge = make_bridge();
+        // 1.5 days ago = 1 day 12 hours
+        let member = make_test_member("OfflinePlayer", 80, false, 1.5);
+        let response = bridge.format_who_search("OfflinePlayer", Some(&member), Some("Cool Guild"));
+        assert!(response.contains("OfflinePlayer"));
+        assert!(response.contains("currently offline"));
+        assert!(response.contains("1 day"));
+        assert!(response.contains("12 hours"));
+    }
+
+    #[test]
+    fn test_format_who_search_not_found() {
+        let bridge = make_bridge();
+        let response = bridge.format_who_search("UnknownPlayer", None, None);
+        assert!(response.contains("UnknownPlayer"));
+        assert!(response.contains("not found in"));
+    }
+
+    #[test]
+    fn test_format_guild_motd() {
+        let bridge = make_bridge();
+        let response = bridge.format_guild_motd(Some("Welcome!"));
+        assert!(response.contains("Welcome!"));
     }
 }

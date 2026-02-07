@@ -483,7 +483,7 @@ impl GameHandler {
     }
 
     /// Get formatted list of online guildies.
-    pub fn get_online_guildies(&self) -> String {
+    pub fn get_online_guildies(&self) -> Vec<GuildMember> {
         let self_name = self.player.as_ref().map(|p| p.name.as_str());
 
         let mut online: Vec<_> = self
@@ -492,32 +492,15 @@ impl GameHandler {
             .filter(|m| {
                 m.online && self_name.map_or(true, |name| !m.name.eq_ignore_ascii_case(name))
             })
+            .cloned()
             .collect();
 
         online.sort_by(|a, b| a.name.cmp(&b.name));
-
-        if online.is_empty() {
-            return "No guildies online.".to_string();
-        }
-
-        let lines: Vec<String> = online
-            .iter()
-            .map(|m| {
-                let class_name = m.class.map_or("Unknown", |c| c.name());
-                format!("{} (Level {} {})", m.name, m.level, class_name)
-            })
-            .collect();
-
-        format!(
-            "{} guildie{} online:\n{}",
-            online.len(),
-            if online.len() == 1 { "" } else { "s" },
-            lines.join(", ")
-        )
+        online
     }
 
     /// Search for a guild member by name (case-insensitive).
-    pub fn search_guild_member(&self, search_name: &str) -> String {
+    pub fn search_guild_member(&self, search_name: &str) -> Option<GuildMember> {
         let search_lower = search_name.to_lowercase();
 
         // Search in guild roster first
@@ -526,26 +509,29 @@ impl GameHandler {
             .values()
             .find(|m| m.name.to_lowercase() == search_lower)
         {
-            let class_name = member.class.map_or("Unknown", |c| c.name());
-            let status = if member.online { "Online" } else { "Offline" };
-            return format!(
-                "{} (Level {} {}) - {}",
-                member.name, member.level, class_name, status
-            );
+            return Some(member.clone());
         }
 
         // If player is online but not in guild roster (rare case)
         if let Some(ref player) = self.player {
             if player.name.to_lowercase() == search_lower {
-                let class_name = player.class.map_or("Unknown", |c| c.name());
-                return format!(
-                    "{} (Level {} {}) - Online (You)",
-                    player.name, player.level, class_name
-                );
+                return Some(GuildMember {
+                    guid: player.guid,
+                    name: player.name.clone(),
+                    level: player.level,
+                    class: player.class,
+                    rank: 0,
+                    rank_name: String::new(),
+                    zone_id: player.zone_id,
+                    online: true,
+                    last_logoff: 0.0,
+                    note: String::new(),
+                    officer_note: String::new(),
+                });
             }
         }
 
-        format!("Player '{}' not found.", search_name)
+        None
     }
 
     /// Get guild MOTD.

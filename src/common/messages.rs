@@ -3,6 +3,8 @@
 //! This module defines the single source of truth for message types
 //! used in communication between Discord and WoW.
 
+use crate::common::types::GuildMember;
+
 /// Guild event data extracted from SMSG_GUILD_EVENT.
 #[derive(Debug, Clone)]
 pub struct GuildEventInfo {
@@ -60,4 +62,17 @@ pub enum BridgeCommand {
     },
     /// Request guild MOTD.
     Gmotd { reply_channel: u64 },
+}
+
+/// Structured response data for Discord commands.
+#[derive(Debug, Clone)]
+pub enum CommandResponseData {
+    /// Simple text response.
+    String(String),
+    /// List of guild members (!who).
+    WhoList(Vec<GuildMember>, Option<String>), // (members, guild_name)
+    /// Single member search result (!who <name>).
+    WhoSearch(String, Option<GuildMember>, Option<String>), // (search_input, member, guild_name)
+    /// Guild MOTD (!gmotd).
+    GuildMotd(Option<String>, Option<String>), // (motd, guild_name)
 }

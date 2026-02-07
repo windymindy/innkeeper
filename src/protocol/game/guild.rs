@@ -169,6 +169,7 @@ impl GuildRosterMember {
             rank_name: rank_name.to_string(),
             zone_id: self.zone_id,
             online: self.online,
+            last_logoff: self.last_logoff,
             note: self.public_note.clone(),
             officer_note: self.officer_note.clone(),
         }
@@ -248,25 +249,30 @@ impl PacketDecode for GuildRoster {
                     buf.remaining()
                 ));
             }
-            buf.advance(4);
+            buf.advance(4); // Rank
             let level = buf.get_u8();
             let class = buf.get_u8();
-            buf.advance(1);
+            buf.advance(1); // Unknown/Padding
             let zone_id = buf.get_u32_le();
 
             // Last logoff only present for offline members
-            if !online && buf.remaining() < 4 {
-                return Err(anyhow!(
-                    "Packet too short: need {} bytes, got {}",
-                    4,
-                    buf.remaining()
-                ));
-            }
-            let last_logoff = if !online { buf.get_f32_le() } else { 0.0 };
+            let last_logoff = if !online {
+                if buf.remaining() < 4 {
+                    return Err(anyhow!(
+                        "Packet too short: need {} bytes, got {}",
+                        4,
+                        buf.remaining()
+                    ));
+                }
+                buf.get_f32_le()
+            } else {
+                0.0
+            };
 
-            // Skip public and officer notes (strings)
-            let _public_note = read_cstring(buf)?;
-            let _officer_note = read_cstring(buf)?;
+            // Public note
+            let public_note = read_cstring(buf)?;
+            // Officer note
+            let officer_note = read_cstring(buf)?;
 
             members.push(GuildRosterMember {
                 guid,
@@ -278,8 +284,8 @@ impl PacketDecode for GuildRoster {
                 gender: 0, // Not present in packet
                 zone_id,
                 last_logoff,
-                public_note: String::new(),
-                officer_note: String::new(),
+                public_note,
+                officer_note,
             });
         }
 

@@ -158,6 +158,38 @@ pub fn get_achievement_name(id: u32) -> Option<&'static str> {
     get_achievements().get(&id).map(|s: &String| s.as_str())
 }
 
+// ============================================================================
+// Area/Zone Database
+// ============================================================================
+
+/// Area database loaded from pre_cata_areas.csv.
+static AREAS: OnceLock<HashMap<u32, String>> = OnceLock::new();
+
+/// Load areas from embedded CSV data.
+fn load_areas() -> HashMap<u32, String> {
+    // Embedded pre_cata_areas.csv content
+    let csv_data = include_str!("../../resources/pre_cata_areas.csv");
+
+    csv_data
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(2, ',');
+            let id = parts.next()?.parse::<u32>().ok()?;
+            let name = parts.next()?.to_string();
+            Some((id, name))
+        })
+        .collect()
+}
+
+/// Get an area/zone name by ID.
+pub fn get_zone_name(id: u32) -> &'static str {
+    AREAS
+        .get_or_init(load_areas)
+        .get(&id)
+        .map(|s| s.as_str())
+        .unwrap_or("Unknown Zone")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
