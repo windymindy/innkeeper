@@ -24,6 +24,8 @@ pub struct ChannelConfig {
     pub format_discord_to_wow: String,
 }
 
+use crate::config::types::GuildDashboardConfig;
+
 /// Shared state accessible from the event handler.
 pub struct BridgeState {
     /// Map from (chat_type, channel_name) to Discord channels.
@@ -51,6 +53,10 @@ pub struct BridgeState {
     pub self_user_id: Option<u64>,
     /// Whether to send tag resolution error notifications.
     pub enable_tag_failed_notifications: bool,
+    /// Dashboard configuration
+    pub dashboard_config: Option<GuildDashboardConfig>,
+    /// Resolved dashboard channel ID
+    pub dashboard_channel_id: Option<ChannelId>,
 }
 
 impl BridgeState {
@@ -75,6 +81,8 @@ impl BridgeState {
             http: None,
             self_user_id: None,
             enable_tag_failed_notifications: false,
+            dashboard_config: None,
+            dashboard_channel_id: None,
         }
     }
 
@@ -86,6 +94,7 @@ impl BridgeState {
         dot_commands_whitelist: Option<Vec<String>>,
         enable_markdown: bool,
         enable_tag_failed_notifications: bool,
+        dashboard_config: Option<GuildDashboardConfig>,
     ) -> Self {
         Self {
             wow_to_discord: HashMap::new(),
@@ -100,6 +109,8 @@ impl BridgeState {
             http: None,
             self_user_id: None,
             enable_tag_failed_notifications,
+            dashboard_config,
+            dashboard_channel_id: None,
         }
     }
 
@@ -179,6 +190,31 @@ impl BridgeState {
 
         // Put back unresolved configs
         self.pending_channel_configs = unresolved;
+
+        // Resolve dashboard channel if config present
+        if let Some(ref config) = self.dashboard_config {
+            if config.enabled {
+                let channel_name = &config.channel;
+                if let Some(discord_channel) = guild_channels.iter().find(|ch| {
+                    if let Ok(channel_id) = channel_name.parse::<u64>() {
+                        if ch.id.get() == channel_id {
+                            return true;
+                        }
+                    }
+                    ch.name().to_lowercase() == channel_name.to_lowercase()
+                }) {
+                    self.dashboard_channel_id = Some(discord_channel.id);
+                    tracing::info!(
+                        "Resolved Dashboard channel '{}' -> #{} (ID {})",
+                        channel_name,
+                        discord_channel.name(),
+                        discord_channel.id
+                    );
+                } else {
+                    tracing::warn!("Could not resolve Dashboard channel: {}", channel_name);
+                }
+            }
+        }
 
         // Return the number of unique Discord channels resolved
         resolved_channels.len()

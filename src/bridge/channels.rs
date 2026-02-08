@@ -5,6 +5,7 @@
 
 use tokio::sync::{mpsc, watch};
 
+use crate::common::messages::DashboardEvent;
 use crate::common::{ActivityStatus, BridgeCommand, BridgeMessage};
 use crate::discord::commands::CommandResponse;
 
@@ -27,6 +28,8 @@ pub struct BridgeChannels {
     pub shutdown_rx: watch::Receiver<bool>,
     /// Sender for status updates (Game -> Discord).
     pub status_tx: mpsc::UnboundedSender<ActivityStatus>,
+    /// Sender for dashboard updates (Game -> Discord).
+    pub dashboard_tx: mpsc::UnboundedSender<DashboardEvent>,
 }
 
 impl BridgeChannels {
@@ -38,6 +41,7 @@ impl BridgeChannels {
     /// - command_response_rx: Receiver for command responses
     /// - shutdown_tx: Sender for shutdown signal (trigger graceful logout)
     /// - status_rx: Receiver for status updates
+    /// - dashboard_rx: Receiver for dashboard updates
     pub fn new() -> (
         Self,
         mpsc::UnboundedReceiver<BridgeMessage>,
@@ -45,6 +49,7 @@ impl BridgeChannels {
         mpsc::UnboundedReceiver<CommandResponse>,
         watch::Sender<bool>,
         mpsc::UnboundedReceiver<ActivityStatus>,
+        mpsc::UnboundedReceiver<DashboardEvent>,
     ) {
         let (wow_tx, wow_rx) = mpsc::unbounded_channel();
         let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
@@ -52,6 +57,7 @@ impl BridgeChannels {
         let (command_response_tx, command_response_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (status_tx, status_rx) = mpsc::unbounded_channel();
+        let (dashboard_tx, dashboard_rx) = mpsc::unbounded_channel();
 
         let channels = Self {
             wow_tx,
@@ -61,6 +67,7 @@ impl BridgeChannels {
             command_response_tx,
             shutdown_rx,
             status_tx,
+            dashboard_tx,
         };
 
         (
@@ -70,13 +77,14 @@ impl BridgeChannels {
             command_response_rx,
             shutdown_tx,
             status_rx,
+            dashboard_rx,
         )
     }
 }
 
 impl Default for BridgeChannels {
     fn default() -> Self {
-        let (channels, _, _, _, _, _) = Self::new();
+        let (channels, _, _, _, _, _, _) = Self::new();
         channels
     }
 }

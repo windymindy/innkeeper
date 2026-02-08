@@ -380,6 +380,13 @@ impl GameHandler {
         // Update last request timestamp
         self.last_roster_request = Some(std::time::Instant::now());
 
+        // Roster generation for guild dashboard testing
+        // Enable with: cargo run --features test_guild_dashboard
+        #[cfg(feature = "test_guild_dashboard")]
+        {
+            self.guild_roster = generate_test_roster();
+        }
+
         Ok(())
     }
 
@@ -993,4 +1000,38 @@ fn unpack_guid(buf: &mut Bytes) -> Result<u64> {
     }
 
     Ok(guid)
+}
+
+#[cfg(feature = "test_guild_dashboard")]
+fn generate_test_roster() -> HashMap<u64, GuildMember> {
+
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let count = rng.gen_range(0..=200);
+
+    info!("Generating test roster with {} members", count);
+    let mut result: HashMap<u64, GuildMember> = HashMap::new();
+    for i in 0..count {
+        let guid = rng.gen::<u64>();
+        let name = format!("{:03}Plr{}", i, i);
+        let level = rng.gen_range(1..=80);
+        let class_id = rng.gen_range(1..=11);
+        let zone_id = rng.gen_range(1..=50);
+        let online = true;
+        let member = GuildMember {
+            guid,
+            name,
+            level,
+            class: crate::common::resources::Class::from_id(class_id),
+            rank: 0,
+            rank_name: String::new(),
+            zone_id,
+            online,
+            last_logoff: 0.0,
+            note: String::new(),
+            officer_note: String::new(),
+        };
+        result.insert(guid, member);
+    }
+    result
 }

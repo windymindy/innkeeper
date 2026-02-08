@@ -9,13 +9,13 @@ use std::time::Duration;
 use serenity::all::Http;
 use serenity::Client;
 use serenity::model::gateway::GatewayIntents;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState, ChannelConfig};
 use crate::common::{ActivityStatus, BridgeMessage};
-use crate::config::types::Config;
+use crate::config::types::{Config, GuildDashboardConfig};
 use crate::bridge::orchestrator::parse_channel_config;
 use crate::discord::commands::CommandResponse;
 
@@ -35,6 +35,10 @@ pub struct DiscordChannels {
     pub cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
     /// Receiver for status updates from game client.
     pub status_rx: mpsc::UnboundedReceiver<ActivityStatus>,
+    /// Receiver for dashboard updates from game client.
+    pub dashboard_rx: mpsc::UnboundedReceiver<crate::common::messages::DashboardEvent>,
+    /// Receiver for shutdown signal.
+    pub shutdown_rx: watch::Receiver<bool>,
 }
 
 /// Shared state that persists across reconnections.
@@ -47,6 +51,8 @@ struct ClientConfig {
     token: String,
     intents: GatewayIntents,
     shared_state: Arc<RwLock<BridgeState>>,
+    dashboard_config: GuildDashboardConfig,
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 impl ClientConfig {
@@ -57,8 +63,17 @@ impl ClientConfig {
         command_tx: mpsc::UnboundedSender<WowCommand>,
         cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
         status_rx: mpsc::UnboundedReceiver<ActivityStatus>,
+        dashboard_rx: mpsc::UnboundedReceiver<crate::common::messages::DashboardEvent>,
     ) -> anyhow::Result<Client> {
-        let handler = BridgeHandler::new(wow_rx, command_tx, cmd_response_rx, status_rx);
+        let handler = BridgeHandler::new(
+            wow_rx,
+            command_tx,
+            cmd_response_rx,
+            status_rx,
+            dashboard_rx,
+            self.dashboard_config.clone(),
+            self.shutdown_rx.clone(),
+        );
 
         let client = Client::builder(&self.token, self.intents)
             .event_handler(handler)
@@ -142,6 +157,8 @@ impl DiscordBotBuilder {
             http: None,
             self_user_id: None,
             enable_tag_failed_notifications: self.config.discord.enable_tag_failed_notifications,
+            dashboard_config: Some(self.config.guild_dashboard.clone()),
+            dashboard_channel_id: None,
         };
 
         let shared_state = Arc::new(RwLock::new(bridge_state));
@@ -158,6 +175,8 @@ impl DiscordBotBuilder {
             token: self.token,
             intents,
             shared_state: shared_state.clone(),
+            dashboard_config: self.config.guild_dashboard.clone(),
+            shutdown_rx: self.channels.shutdown_rx.clone(),
         };
 
         // Build initial client
@@ -166,6 +185,9 @@ impl DiscordBotBuilder {
             self.channels.command_tx.clone(),
             self.channels.cmd_response_rx,
             self.channels.status_rx,
+            self.channels.dashboard_rx,
+            self.config.guild_dashboard.clone(),
+            self.channels.shutdown_rx,
         );
 
         let client = Client::builder(&client_config.token, client_config.intents)
@@ -213,7 +235,16 @@ impl DiscordBot {
     
 
     /// Run the Discord bot with automatic reconnection.
-    pub async fn run(mut self) {
+    pub async fn run(self) {
+        self.run_internal(None).await;
+    }
+
+    /// Run the Discord bot and signal when ready.
+    pub async fn run_with_ready_signal(self, ready_tx: tokio::sync::oneshot::Sender<()>) {
+        self.run_internal(Some(ready_tx)).await;
+    }
+
+    async fn run_internal(mut self, mut ready_tx: Option<tokio::sync::oneshot::Sender<()>>) {
         let mut retry_count = 0u32;
         let max_retries = 10;
         let base_delay = Duration::from_secs(5);
@@ -244,7 +275,10 @@ impl DiscordBot {
                     // Create a dummy status channel for reconnection (status updates lost during reconnect)
                     let (_dummy_status_tx, dummy_status_rx) = mpsc::unbounded_channel::<ActivityStatus>();
 
-                    match self.config.build_client(new_wow_rx, self.command_tx.clone(), dummy_cmd_rx, dummy_status_rx).await {
+                    // Create a dummy dashboard channel for reconnection
+                    let (_dummy_dashboard_tx, dummy_dashboard_rx) = mpsc::unbounded_channel::<crate::common::messages::DashboardEvent>();
+
+                    match self.config.build_client(new_wow_rx, self.command_tx.clone(), dummy_cmd_rx, dummy_status_rx, dummy_dashboard_rx).await {
                         Ok(client) => {
                             // Update HTTP reference
                             self.http = client.http.clone();
@@ -265,6 +299,27 @@ impl DiscordBot {
                     }
                 }
             };
+
+            // Signal ready if this is the first successful connection attempt
+            if let Some(tx) = ready_tx.take() {
+                let bridge_state = self.config.shared_state.clone();
+                tokio::spawn(async move {
+                    // Wait for up to 30 seconds for channels to be resolved
+                    for _ in 0..60 {
+                        {
+                            let state = bridge_state.read().await;
+                            // Check if we have resolved any channels or if dashboard channel is resolved
+                            if !state.wow_to_discord.is_empty() || state.dashboard_channel_id.is_some() {
+                                let _ = tx.send(());
+                                return;
+                            }
+                        }
+                        sleep(Duration::from_millis(500)).await;
+                    }
+                    // If timed out, send anyway so we don't hang forever (main loop has its own timeout too)
+                    let _ = tx.send(());
+                });
+            }
 
             // Run the client
             match client.start().await {

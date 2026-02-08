@@ -5,6 +5,7 @@
 
 pub mod client;
 pub mod commands;
+pub mod dashboard;
 pub mod handler;
 pub mod resolver;
 

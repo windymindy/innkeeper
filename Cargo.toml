@@ -6,6 +6,10 @@ description = "Discord-WoW chat bridge for Ascension private server"
 authors = ["Innkeeper Contributors"]
 repository = "https://github.com/anomalyco/innkeeper"
 
+[features]
+default = []
+test_guild_dashboard = []
+
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }

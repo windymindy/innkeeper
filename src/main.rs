@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     // ============================================================
 
     // Create bridge channels (single source of truth)
-    let (game_channels, wow_rx, command_tx, cmd_response_rx, shutdown_tx, status_rx) = BridgeChannels::new();
+    let (game_channels, wow_rx, command_tx, cmd_response_rx, shutdown_tx, status_rx, dashboard_rx) = BridgeChannels::new();
 
     // Clone senders needed for Discord bot
     let outgoing_wow_tx = game_channels.outgoing_wow_tx.clone();
@@ -85,6 +85,8 @@ async fn main() -> Result<()> {
         command_tx: discord_command_tx.clone(),
         cmd_response_rx,
         status_rx,
+        dashboard_rx,
+        shutdown_rx: game_channels.shutdown_rx.clone(),
     };
 
     let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels, bridge.clone())
@@ -134,22 +136,31 @@ async fn main() -> Result<()> {
     };
 
     // ============================================================
-    // Connect to WoW realm
+    // Start Discord bot
     // ============================================================
-    info!("Authenticating with realm server...");
-    let session = connect_and_authenticate(
-        &realm_host,
-        realm_port,
-        &config.wow.account,
-        &config.wow.password,
-        &config.wow.realm,
-    )
-    .await?;
+    info!("Starting Discord bot...");
 
-    info!("Realm authentication successful!");
+    // We need to wait for Discord to be ready before starting the game client
+    // because the game client needs channel mappings resolved from Discord
+    // to route messages correctly.
+
+    // Create a one-shot channel to signal when Discord is ready
+    let (discord_ready_tx, discord_ready_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let discord_task = tokio::spawn(async move {
+        discord_bot.run_with_ready_signal(discord_ready_tx).await;
+    });
+
+    info!("Waiting for Discord to connect and resolve channels...");
+    // Wait for Discord to be ready (or timeout after 60s)
+    match tokio::time::timeout(tokio::time::Duration::from_secs(60), discord_ready_rx).await {
+        Ok(Ok(())) => info!("Discord ready! Starting game client..."),
+        Ok(Err(_)) => warn!("Discord bot task dropped signal sender"),
+        Err(_) => warn!("Timed out waiting for Discord to become ready"),
+    }
 
     // ============================================================
-    // Start game client
+    // Start Game client in separate task
     // ============================================================
     let channels_to_join: Vec<String> = bridge
         .channels_to_join()
@@ -157,31 +168,82 @@ async fn main() -> Result<()> {
         .map(|s| s.to_string())
         .collect();
 
-    info!("Starting game client...");
-    let mut game_client = GameClient::new(
-        config.clone(),
-        session,
-        game_channels,
-        channels_to_join,
-    );
+    // Prepare for loop
+    use common::reconnect::{ReconnectConfig, ReconnectState};
+    use common::ActivityStatus;
 
+    let realm_host = realm_host.to_string();
+    let config_clone = config.clone();
 
-
-    // ============================================================
-    // Start Discord bot
-    // ============================================================
-    info!("Starting Discord bot...");
-    let discord_task = tokio::spawn(async move {
-        discord_bot.run().await;
-    });
-
-    // ============================================================
-    // Start Game client in separate task
-    // ============================================================
     let mut game_task = tokio::spawn(async move {
-        match game_client.run().await {
-            Ok(()) => info!("Game client disconnected"),
-            Err(e) => error!("Game client error: {}", e),
+        // Create client once
+        let mut game_client = GameClient::new(
+            config_clone.clone(),
+            game_channels,
+            channels_to_join,
+        );
+
+        let mut reconnect_state = ReconnectState::new(ReconnectConfig::default());
+
+        loop {
+            // Check for shutdown before connecting
+            if game_client.channels.shutdown_rx.has_changed().unwrap_or(false) && *game_client.channels.shutdown_rx.borrow() {
+                info!("Shutdown signal detected, stopping reconnection loop");
+                break;
+            }
+
+            info!("Authenticating with realm server...");
+            // Send Connecting status
+            if let Err(_) = game_client.channels.status_tx.send(ActivityStatus::Connecting) {
+                // Receiver might be closed if shutting down
+            }
+
+            match connect_and_authenticate(
+                &realm_host,
+                realm_port,
+                &config_clone.wow.account,
+                &config_clone.wow.password,
+                &config_clone.wow.realm,
+            ).await {
+                Ok(session) => {
+                    info!("Realm authentication successful!");
+                    reconnect_state.reset();
+
+                    // Run game client
+                    match game_client.run(session).await {
+                        Ok(()) => info!("Game client disconnected"),
+                        Err(e) => error!("Game client error: {}", e),
+                    }
+                }
+                Err(e) => {
+                    error!("Realm authentication failed: {}", e);
+                }
+            }
+
+            // We disconnected or failed to connect
+            let _ = game_client.channels.status_tx.send(ActivityStatus::Disconnected);
+            // Send dashboard offline event
+            use common::messages::DashboardEvent;
+            let _ = game_client.channels.dashboard_tx.send(DashboardEvent::SetOffline);
+
+            // Calculate backoff
+            if let Some(delay) = reconnect_state.next_delay() {
+                info!("Reconnecting in {:.1} seconds...", delay.as_secs_f64());
+
+                // Wait for delay OR shutdown signal
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = game_client.channels.shutdown_rx.changed() => {
+                        if *game_client.channels.shutdown_rx.borrow() {
+                            info!("Shutdown signal received during backoff");
+                            break;
+                        }
+                    }
+                }
+            } else {
+                error!("Max reconnection attempts reached");
+                break;
+            }
         }
     });
 

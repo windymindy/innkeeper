@@ -22,52 +22,48 @@ use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, Init
 
 pub struct GameClient {
     config: Config,
-    session: RealmSession,
-    channels: BridgeChannels,
+    pub channels: BridgeChannels,
     custom_channels: Vec<String>,
 }
 
 impl GameClient {
-    pub fn new(config: Config, session: RealmSession, channels: BridgeChannels, custom_channels: Vec<String>) -> Self {
+    pub fn new(config: Config, channels: BridgeChannels, custom_channels: Vec<String>) -> Self {
         Self {
             config,
-            session,
             channels,
             custom_channels,
         }
     }
 
-    pub async fn run(&mut self) -> Result<()> {
-        let (host, port) = self
-            .session
+    pub async fn run(&mut self, session: RealmSession) -> Result<()> {
+        let (host, port) = session
             .realm
             .parse_address()
             .ok_or_else(|| anyhow!("Invalid realm address"))?;
         info!("Connecting to game server at {}:{}", host, port);
         let stream = TcpStream::connect((host, port)).await?;
-        self.handle_connection(stream).await
+        self.handle_connection(stream, session).await
     }
 
     pub async fn handle_connection<S>(
         &mut self,
         stream: S,
+        session: RealmSession,
     ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        // Send connecting status
-        if let Err(e) = self.channels.status_tx.send(ActivityStatus::Connecting) {
-            warn!("Failed to send connecting status: {}", e);
-        }
-
         let mut connection = new_game_connection(stream);
         let mut handler = GameHandler::new(
             &self.config.wow.account,
-            self.session.session_key,
-            self.session.realm.id as u32,
+            session.session_key,
+            session.realm.id as u32,
             &self.config.wow.character,
         );
         let mut shutdown_rx = self.channels.shutdown_rx.clone();
+        // Ping interval (30s)
+        let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         info!("Game connection established");
 
@@ -84,7 +80,7 @@ impl GameClient {
                                     connection.send(auth_session.into()).await?;
                                     info!("Sent auth session");
                                     // Initialize header crypt with session key after sending AUTH_SESSION
-                                    connection.codec_mut().init_crypt(&self.session.session_key);
+                                    connection.codec_mut().init_crypt(&session.session_key);
                                 }
                                 SMSG_AUTH_RESPONSE => {
                                     let response = AuthResponse::decode(&mut payload)?;
@@ -209,6 +205,21 @@ impl GameClient {
                                     let online_count = handler.get_online_guildies_count();
                                     if let Err(e) = self.channels.status_tx.send(ActivityStatus::GuildStats { online_count }) {
                                         warn!("Failed to send guild stats status: {}", e);
+                                    }
+
+                                    // Send guild dashboard update
+                                    if let Some(guild_info) = &handler.guild_info {
+                                        use crate::common::messages::{DashboardEvent, GuildDashboardData};
+                                        let dashboard_data = GuildDashboardData {
+                                            guild_name: guild_info.name.clone(),
+                                            realm: self.config.wow.realm.clone(),
+                                            members: handler.get_online_guildies(),
+                                            online: true,
+                                        };
+
+                                        if let Err(e) = self.channels.dashboard_tx.send(DashboardEvent::Update(dashboard_data)) {
+                                            warn!("Failed to send guild dashboard update: {}", e);
+                                        }
                                     }
                                 }
                                 SMSG_GUILD_EVENT => {
@@ -400,7 +411,7 @@ impl GameClient {
                     }
                 }
                 // Ping keepalive every 30 seconds
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                _ = ping_interval.tick() => {
                     if handler.in_world {
                         let ping = handler.build_ping(0); // sequence doesn't matter for keepalive
                         if let Err(e) = connection.send(ping.into()).await {
@@ -536,14 +547,14 @@ mod tests {
     async fn test_auth_flow() {
         let config = make_test_config();
         let session = make_test_session();
-        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx, _shutdown_tx, _status_tx) = BridgeChannels::new();
-        let mut client = GameClient::new(config, session, channels, Vec::new());
+        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx, _shutdown_tx, _status_tx, _dashboard_rx) = BridgeChannels::new();
+        let mut client = GameClient::new(config, channels, Vec::new());
 
         let (client_stream, mut server_stream) = tokio::io::duplex(4096);
 
         // Spawn client task
         tokio::spawn(async move {
-            if let Err(e) = client.handle_connection(client_stream).await {
+            if let Err(e) = client.handle_connection(client_stream, session).await {
                 // It might fail when we close the stream, which is fine
                 println!("Client finished: {:?}", e);
             }

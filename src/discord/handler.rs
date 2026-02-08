@@ -15,7 +15,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::bridge::{Bridge, BridgeState};
 use crate::common::{BridgeMessage, DiscordMessage};
+use crate::config::types::GuildDashboardConfig;
+use crate::common::messages::DashboardEvent;
 use crate::discord::commands::{CommandHandler, CommandResponse, WowCommand};
+use crate::discord::dashboard::DashboardRenderer;
 
 // Re-export BridgeState's TypeMapKey implementation for Discord's context system
 impl TypeMapKey for BridgeState {
@@ -37,6 +40,12 @@ pub struct BridgeHandler {
     cmd_response_rx: Arc<Mutex<mpsc::UnboundedReceiver<CommandResponse>>>,
     /// Receiver for status updates (from GameClient).
     status_rx: Arc<Mutex<mpsc::UnboundedReceiver<crate::common::ActivityStatus>>>,
+    /// Receiver for dashboard updates.
+    dashboard_rx: Arc<Mutex<mpsc::UnboundedReceiver<DashboardEvent>>>,
+    /// Dashboard configuration.
+    dashboard_config: GuildDashboardConfig,
+    /// Shutdown signal.
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 impl BridgeHandler {
@@ -45,12 +54,18 @@ impl BridgeHandler {
         command_tx: mpsc::UnboundedSender<WowCommand>,
         cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
         status_rx: mpsc::UnboundedReceiver<crate::common::ActivityStatus>,
+        dashboard_rx: mpsc::UnboundedReceiver<DashboardEvent>,
+        dashboard_config: GuildDashboardConfig,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) -> Self {
         Self {
             wow_rx: Arc::new(Mutex::new(wow_rx)),
             command_handler: CommandHandler::new(command_tx),
             cmd_response_rx: Arc::new(Mutex::new(cmd_response_rx)),
             status_rx: Arc::new(Mutex::new(status_rx)),
+            dashboard_rx: Arc::new(Mutex::new(dashboard_rx)),
+            dashboard_config,
+            shutdown_rx,
         }
     }
 }
@@ -206,9 +221,19 @@ impl EventHandler for BridgeHandler {
                 use crate::common::ActivityStatus;
                 use serenity::gateway::ActivityData;
 
-                let activity = match status {
-                    ActivityStatus::Connecting => ActivityData::custom("Connecting..."),
-                    ActivityStatus::ConnectedToRealm(realm) => ActivityData::custom(realm),
+                match status {
+                    ActivityStatus::Connecting => {
+                        let activity = ActivityData::custom("Connecting...");
+                        status_ctx.set_activity(Some(activity));
+                    },
+                    ActivityStatus::Disconnected => {
+                        let activity = ActivityData::custom("Offline");
+                        status_ctx.set_activity(Some(activity));
+                    },
+                    ActivityStatus::ConnectedToRealm(realm) => {
+                        let activity = ActivityData::custom(realm);
+                        status_ctx.set_activity(Some(activity));
+                    },
                     ActivityStatus::GuildStats { online_count } => {
                         let plural = if online_count == 1 { "" } else { "s" };
                         let text = if online_count == 0 {
@@ -216,15 +241,70 @@ impl EventHandler for BridgeHandler {
                         } else {
                             format!("{} guildie{} online", online_count, plural)
                         };
-                        ActivityData::watching(text)
-                    }
-                };
-
-                status_ctx.set_activity(Some(activity));
+                        let activity = ActivityData::watching(text);
+                        status_ctx.set_activity(Some(activity));
+                    },
+                }
             }
 
             info!("Status update task ended");
         });
+
+        // Start dashboard update task
+        let dashboard_rx = Arc::clone(&self.dashboard_rx);
+        let dashboard_ctx = ctx.clone();
+        let dashboard_config = self.dashboard_config.clone();
+        let dashboard_data_ref = ctx.data.clone();
+        let mut shutdown_rx = self.shutdown_rx.clone();
+
+        tokio::spawn(async move {
+            let mut rx = dashboard_rx.lock().await;
+            let mut dashboard = DashboardRenderer::new(dashboard_config);
+
+            loop {
+                tokio::select! {
+                    event_opt = rx.recv() => {
+                        match event_opt {
+                            Some(event) => {
+                                // Check shutdown first
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+
+                                // Get resolved channel ID from BridgeState
+                                let channel_id = {
+                                    let data = dashboard_data_ref.read().await;
+                                    if let Some(state) = data.get::<BridgeState>() {
+                                        let state = state.read().await;
+                                        state.dashboard_channel_id
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                match event {
+                                    DashboardEvent::Update(data) => {
+                                        dashboard.update(&dashboard_ctx, channel_id, data).await;
+                                    },
+                                    DashboardEvent::SetOffline => {
+                                        dashboard.set_offline(&dashboard_ctx, channel_id).await;
+                                    }
+                                }
+                            }
+                            None => break, // Channel closed
+                        }
+                    }
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            info!("Dashboard update task ended");
+        });
+
 
         // Start WoW -> Discord forwarding task
         let wow_rx = Arc::clone(&self.wow_rx);
@@ -332,32 +412,52 @@ impl EventHandler for BridgeHandler {
         let cmd_response_rx = Arc::clone(&self.cmd_response_rx);
         let cmd_http = ctx.http.clone();
         let cmd_data = ctx.data.clone();
+        let mut shutdown_rx_cmd = self.shutdown_rx.clone();
 
         tokio::spawn(async move {
             let mut rx = cmd_response_rx.lock().await;
 
-            while let Some(response) = rx.recv().await {
-                let data = cmd_data.read().await;
-                if let Some(bridge) = data.get::<Bridge>() {
-                    if let Some(state) = data.get::<BridgeState>() {
-                        let state = state.read().await;
+            loop {
+                tokio::select! {
+                    response_opt = rx.recv() => {
+                        match response_opt {
+                            Some(response) => {
+                                // Check shutdown first
+                                if *shutdown_rx_cmd.borrow() {
+                                    break;
+                                }
 
-                        // Apply bridge formatting (e.g., MOTD format)
-                        let formatted = bridge.format_command_response(&response.content);
+                                let data = cmd_data.read().await;
+                                if let Some(bridge) = data.get::<Bridge>() {
+                                    if let Some(state) = data.get::<BridgeState>() {
+                                        let state = state.read().await;
 
-                        // Apply post-bridge processing (emojis, markdown escape)
-                        let result = state.resolver.process_post_bridge(
-                            &ctx.cache,
-                            serenity::model::id::ChannelId::new(response.channel_id),
-                            &formatted,
-                            state.self_user_id.unwrap_or(0),
-                        );
+                                        // Apply bridge formatting (e.g., MOTD format)
+                                        let formatted = bridge.format_command_response(&response.content);
 
-                        // Send to Discord
-                        use serenity::model::id::ChannelId;
-                        let channel = ChannelId::new(response.channel_id);
-                        if let Err(e) = channel.say(&cmd_http, &result.message).await {
-                            error!("Failed to send command response to Discord: {}", e);
+                                        // Apply post-bridge processing (emojis, markdown escape)
+                                        let result = state.resolver.process_post_bridge(
+                                            &ctx.cache,
+                                            serenity::model::id::ChannelId::new(response.channel_id),
+                                            &formatted,
+                                            state.self_user_id.unwrap_or(0),
+                                        );
+
+                                        // Send to Discord
+                                        use serenity::model::id::ChannelId;
+                                        let channel = ChannelId::new(response.channel_id);
+                                        if let Err(e) = channel.say(&cmd_http, &result.message).await {
+                                            error!("Failed to send command response to Discord: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            None => break, // Channel closed
+                        }
+                    }
+                    _ = shutdown_rx_cmd.changed() => {
+                        if *shutdown_rx_cmd.borrow() {
+                            break;
                         }
                     }
                 }

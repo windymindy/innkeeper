@@ -84,6 +84,26 @@ pub enum ActivityStatus {
     Connecting,
     /// Bot is connected to a realm.
     ConnectedToRealm(String),
+    /// Bot is disconnected from the realm.
+    Disconnected,
     /// Update on guild statistics (online count).
     GuildStats { online_count: usize },
+}
+
+/// Data for the guild dashboard.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuildDashboardData {
+    pub guild_name: String,
+    pub realm: String,
+    pub members: Vec<GuildMember>,
+    pub online: bool,
+}
+
+/// Events for the dashboard renderer.
+#[derive(Debug, Clone)]
+pub enum DashboardEvent {
+    /// Update dashboard with new data.
+    Update(GuildDashboardData),
+    /// Set dashboard status to offline (preserving last data).
+    SetOffline,
 }

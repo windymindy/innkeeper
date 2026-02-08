@@ -17,7 +17,7 @@ pub struct Player {
 }
 
 /// Represents a guild member.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GuildMember {
     pub guid: Guid,
     pub name: String,
