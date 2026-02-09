@@ -8,7 +8,7 @@
 //!
 //! - `channels`: Communication channel structures
 //! - `orchestrator`: Main bridge orchestrator (`Bridge` struct)
-//! - `state`: Shared bridge state (`BridgeState`, `ChannelConfig`)
+//! - `state`: Bridge state types (pending, resolved, task contexts)
 
 pub mod channels;
 pub mod filter;
@@ -18,7 +18,10 @@ pub mod state;
 // Re-export main types for convenience
 pub use channels::BridgeChannels;
 pub use orchestrator::Bridge;
-pub use state::{BridgeState, ChannelConfig};
+pub use state::{
+    ChannelConfig, CommandResponseContext, DashboardContext, DiscordToWowContext,
+    PendingBridgeState, ResolvedBridgeState, WowToDiscordContext,
+};
 
 // Re-export message types from common for backwards compatibility
 pub use crate::common::{BridgeCommand, BridgeMessage};

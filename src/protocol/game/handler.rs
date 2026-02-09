@@ -413,6 +413,10 @@ impl GameHandler {
     pub fn handle_guild_event(&mut self, mut payload: Bytes) -> Result<Option<GuildEventInfo>> {
         let event = GuildEventPacket::decode(&mut payload)?;
 
+        if event.strings.iter().all(|s| s.trim().is_empty()) {
+            return Ok(None);
+        }
+
         // Convert event type to GuildEvent enum
         let guild_event = GuildEvent::from_id(event.event_type);
 
@@ -1004,7 +1008,6 @@ fn unpack_guid(buf: &mut Bytes) -> Result<u64> {
 
 #[cfg(feature = "test_guild_dashboard")]
 fn generate_test_roster() -> HashMap<u64, GuildMember> {
-
     use rand::Rng;
     let mut rng = rand::thread_rng();
     let count = rng.gen_range(0..=200);

@@ -2,84 +2,341 @@
 //!
 //! Provides the event handler for Discord messages and manages
 //! the message flow between Discord and WoW.
+//!
+//! ## Initialization Flow
+//!
+//! 1. `ready()`: Stores HTTP client and user ID, signals ready state
+//! 2. `guild_create()`: Resolves channels, builds ResolvedBridgeState, spawns tasks
+//! 3. Background tasks run with owned copies of their required state
 
 use std::sync::Arc;
 
 use serenity::async_trait;
-use serenity::model::channel::{GuildChannel, Message};
+use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::model::guild::Guild;
 use serenity::prelude::*;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, error, info, warn};
 
-use crate::bridge::{Bridge, BridgeState};
-use crate::common::{BridgeMessage, DiscordMessage};
-use crate::config::types::GuildDashboardConfig;
+use crate::bridge::{
+    Bridge, CommandResponseContext, DashboardContext, DiscordToWowContext, PendingBridgeState,
+    ResolvedBridgeState, WowToDiscordContext,
+};
 use crate::common::messages::DashboardEvent;
+use crate::common::{ActivityStatus, BridgeMessage, DiscordMessage};
+use crate::config::types::GuildDashboardConfig;
 use crate::discord::commands::{CommandHandler, CommandResponse, WowCommand};
 use crate::discord::dashboard::DashboardRenderer;
 
-// Re-export BridgeState's TypeMapKey implementation for Discord's context system
-impl TypeMapKey for BridgeState {
-    type Value = Arc<RwLock<BridgeState>>;
+/// Data passed from ready() to guild_create() for state resolution.
+struct ReadyData {
+    self_user_id: u64,
 }
 
-// Store Bridge in context for access by handler
-impl TypeMapKey for Bridge {
-    type Value = Arc<Bridge>;
+/// Channels bundle for background tasks.
+/// These are consumed when tasks are spawned (moved into the tasks).
+pub struct TaskChannels {
+    pub wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
+    pub cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
+    pub status_rx: mpsc::UnboundedReceiver<ActivityStatus>,
+    pub dashboard_rx: mpsc::UnboundedReceiver<DashboardEvent>,
 }
 
 /// Discord event handler.
+///
+/// Manages the bridge lifecycle:
+/// - Receives Discord events from serenity
+/// - Coordinates state resolution between ready() and guild_create()
+/// - Spawns background tasks after state is fully resolved
 pub struct BridgeHandler {
-    /// Receiver for WoW -> Discord messages.
-    wow_rx: Arc<Mutex<mpsc::UnboundedReceiver<BridgeMessage>>>,
-    /// Command handler.
+    /// Bridge for message routing/formatting (immutable, shared).
+    bridge: Arc<Bridge>,
+    /// Pending state waiting for resolution (consumed in guild_create).
+    pending_state: std::sync::Mutex<Option<PendingBridgeState>>,
+    /// Task channels waiting to be consumed (consumed in guild_create).
+    task_channels: std::sync::Mutex<Option<TaskChannels>>,
+    /// Ready data sender (used once in ready()).
+    ready_tx: std::sync::Mutex<Option<oneshot::Sender<ReadyData>>>,
+    /// Ready data receiver (used once in guild_create()).
+    ready_rx: std::sync::Mutex<Option<oneshot::Receiver<ReadyData>>>,
+    /// Command handler for Discord commands.
     command_handler: CommandHandler,
-    /// Receiver for command responses.
-    cmd_response_rx: Arc<Mutex<mpsc::UnboundedReceiver<CommandResponse>>>,
-    /// Receiver for status updates (from GameClient).
-    status_rx: Arc<Mutex<mpsc::UnboundedReceiver<crate::common::ActivityStatus>>>,
-    /// Receiver for dashboard updates.
-    dashboard_rx: Arc<Mutex<mpsc::UnboundedReceiver<DashboardEvent>>>,
     /// Dashboard configuration.
     dashboard_config: GuildDashboardConfig,
-    /// Shutdown signal.
-    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    /// Shutdown signal receiver.
+    shutdown_rx: watch::Receiver<bool>,
+    /// Resolved state (available after guild_create, for message() handler).
+    resolved_state: std::sync::Mutex<Option<Arc<ResolvedBridgeState>>>,
 }
 
 impl BridgeHandler {
+    /// Create a new bridge handler.
+    ///
+    /// The handler takes ownership of all channels and pending state.
+    /// Tasks are NOT spawned until guild_create() resolves the state.
     pub fn new(
-        wow_rx: mpsc::UnboundedReceiver<BridgeMessage>,
+        bridge: Arc<Bridge>,
+        pending_state: PendingBridgeState,
+        task_channels: TaskChannels,
         command_tx: mpsc::UnboundedSender<WowCommand>,
-        cmd_response_rx: mpsc::UnboundedReceiver<CommandResponse>,
-        status_rx: mpsc::UnboundedReceiver<crate::common::ActivityStatus>,
-        dashboard_rx: mpsc::UnboundedReceiver<DashboardEvent>,
         dashboard_config: GuildDashboardConfig,
-        shutdown_rx: tokio::sync::watch::Receiver<bool>,
+        shutdown_rx: watch::Receiver<bool>,
     ) -> Self {
+        let (ready_tx, ready_rx) = oneshot::channel();
+
         Self {
-            wow_rx: Arc::new(Mutex::new(wow_rx)),
+            bridge,
+            pending_state: std::sync::Mutex::new(Some(pending_state)),
+            task_channels: std::sync::Mutex::new(Some(task_channels)),
+            ready_tx: std::sync::Mutex::new(Some(ready_tx)),
+            ready_rx: std::sync::Mutex::new(Some(ready_rx)),
             command_handler: CommandHandler::new(command_tx),
-            cmd_response_rx: Arc::new(Mutex::new(cmd_response_rx)),
-            status_rx: Arc::new(Mutex::new(status_rx)),
-            dashboard_rx: Arc::new(Mutex::new(dashboard_rx)),
             dashboard_config,
             shutdown_rx,
+            resolved_state: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Spawn background tasks with owned copies of their required context.
+    fn spawn_background_tasks(
+        &self,
+        ctx: &Context,
+        resolved_state: &ResolvedBridgeState,
+        mut task_channels: TaskChannels,
+    ) {
+        // Create task-specific contexts (owned copies)
+        let wow_to_discord_ctx = WowToDiscordContext::from_resolved(resolved_state);
+        let cmd_response_ctx = CommandResponseContext::from_resolved(resolved_state);
+        let dashboard_ctx =
+            DashboardContext::from_resolved(resolved_state, self.dashboard_config.clone());
+
+        // Spawn status update task
+        let status_ctx = ctx.clone();
+        let mut status_rx = task_channels.status_rx;
+        tokio::spawn(async move {
+            while let Some(status) = status_rx.recv().await {
+                use serenity::gateway::ActivityData;
+
+                match status {
+                    ActivityStatus::Connecting => {
+                        let activity = ActivityData::custom("Connecting...");
+                        status_ctx.set_activity(Some(activity));
+                    }
+                    ActivityStatus::Disconnected => {
+                        let activity = ActivityData::custom("Offline");
+                        status_ctx.set_activity(Some(activity));
+                    }
+                    ActivityStatus::ConnectedToRealm(realm) => {
+                        let activity = ActivityData::custom(realm);
+                        status_ctx.set_activity(Some(activity));
+                    }
+                    ActivityStatus::GuildStats { online_count } => {
+                        let plural = if online_count == 1 { "" } else { "s" };
+                        let text = if online_count == 0 {
+                            "Currently no guildies online".to_string()
+                        } else {
+                            format!("{} guildie{} online", online_count, plural)
+                        };
+                        let activity = ActivityData::watching(text);
+                        status_ctx.set_activity(Some(activity));
+                    }
+                }
+            }
+            info!("Status update task ended");
+        });
+
+        // Spawn dashboard update task
+        let dashboard_ctx_serenity = ctx.clone();
+        let mut dashboard_rx = task_channels.dashboard_rx;
+        let mut dashboard_shutdown = self.shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut dashboard = DashboardRenderer::new(dashboard_ctx.config);
+
+            loop {
+                tokio::select! {
+                    event_opt = dashboard_rx.recv() => {
+                        match event_opt {
+                            Some(event) => {
+                                if *dashboard_shutdown.borrow() {
+                                    break;
+                                }
+                                match event {
+                                    DashboardEvent::Update(data) => {
+                                        dashboard.update(&dashboard_ctx_serenity, dashboard_ctx.channel_id, data).await;
+                                    }
+                                    DashboardEvent::SetOffline => {
+                                        dashboard.set_offline(&dashboard_ctx_serenity, dashboard_ctx.channel_id).await;
+                                    }
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = dashboard_shutdown.changed() => {
+                        if *dashboard_shutdown.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+            info!("Dashboard update task ended");
+        });
+
+        // Spawn WoW -> Discord forwarding task
+        let bridge = self.bridge.clone();
+        let cache = ctx.cache.clone();
+        let mut wow_rx = task_channels.wow_rx;
+        tokio::spawn(async move {
+            while let Some(msg) = wow_rx.recv().await {
+                // Pre-process WoW content (resolve links, strip colors/textures)
+                let processed_content = wow_to_discord_ctx.resolver.process_pre_bridge(&msg.content);
+
+                // Process and filter message through Bridge
+                let results = bridge.handle_wow_to_discord(
+                    msg.chat_type,
+                    msg.channel_name.as_deref(),
+                    msg.sender.as_deref(),
+                    &processed_content,
+                    msg.format.as_deref(),
+                    msg.guild_event.as_ref(),
+                );
+
+                // Send filtered messages to appropriate Discord channels
+                for (discord_channel_name, formatted) in results {
+                    let key = (
+                        msg.chat_type,
+                        msg.channel_name.as_ref().map(|s| s.to_lowercase()),
+                    );
+                    if let Some(channel_configs) = wow_to_discord_ctx.wow_to_discord.get(&key) {
+                        for config in channel_configs {
+                            if config.discord_channel_name == discord_channel_name {
+                                if let Some(channel_id) = config.discord_channel_id {
+                                    // Apply post-bridge processing (emojis, tags, markdown escape)
+                                    let (final_message, tag_errors) = if msg.sender.is_some() {
+                                        let result = wow_to_discord_ctx.resolver.process_post_bridge(
+                                            &cache,
+                                            channel_id,
+                                            &formatted,
+                                            wow_to_discord_ctx.self_user_id,
+                                        );
+                                        (result.message, result.errors)
+                                    } else {
+                                        (formatted.clone(), Vec::new())
+                                    };
+
+                                    // Send the message to Discord
+                                    match channel_id.say(&wow_to_discord_ctx.http, &final_message).await {
+                                        Ok(_) => {
+                                            debug!(
+                                                "Sent to Discord #{}: {}",
+                                                discord_channel_name, final_message
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to send to Discord channel {}: {}",
+                                                discord_channel_name, e
+                                            );
+                                        }
+                                    }
+
+                                    // Handle tag resolution errors
+                                    if wow_to_discord_ctx.enable_tag_failed_notifications
+                                        && !tag_errors.is_empty()
+                                    {
+                                        for error_msg in &tag_errors {
+                                            // Send error to Discord channel
+                                            if let Err(e) =
+                                                channel_id.say(&wow_to_discord_ctx.http, error_msg).await
+                                            {
+                                                warn!("Failed to send tag error to Discord: {}", e);
+                                            }
+
+                                            // Send whisper back to WoW sender
+                                            if let Some(ref sender) = msg.sender {
+                                                let whisper_msg = BridgeMessage {
+                                                    sender: None,
+                                                    content: error_msg.clone(),
+                                                    chat_type: 7, // CHAT_MSG_WHISPER
+                                                    channel_name: Some(sender.clone()),
+                                                    format: None,
+                                                    guild_event: None,
+                                                };
+                                                if let Err(e) =
+                                                    wow_to_discord_ctx.wow_tx.send(whisper_msg)
+                                                {
+                                                    warn!(
+                                                        "Failed to send tag error whisper to WoW: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            info!("WoW -> Discord forwarding task ended");
+        });
+
+        // Spawn command response forwarding task
+        let cmd_bridge = self.bridge.clone();
+        let cmd_cache = ctx.cache.clone();
+        let mut cmd_rx = task_channels.cmd_response_rx;
+        let mut cmd_shutdown = self.shutdown_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    response_opt = cmd_rx.recv() => {
+                        match response_opt {
+                            Some(response) => {
+                                if *cmd_shutdown.borrow() {
+                                    break;
+                                }
+
+                                // Apply bridge formatting (e.g., MOTD format)
+                                let formatted = cmd_bridge.format_command_response(&response.content);
+
+                                // Apply post-bridge processing (emojis, markdown escape)
+                                let result = cmd_response_ctx.resolver.process_post_bridge(
+                                    &cmd_cache,
+                                    serenity::model::id::ChannelId::new(response.channel_id),
+                                    &formatted,
+                                    cmd_response_ctx.self_user_id,
+                                );
+
+                                // Send to Discord
+                                let channel = serenity::model::id::ChannelId::new(response.channel_id);
+                                if let Err(e) = channel.say(&cmd_response_ctx.http, &result.message).await {
+                                    error!("Failed to send command response to Discord: {}", e);
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = cmd_shutdown.changed() => {
+                        if *cmd_shutdown.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+            info!("Command response forwarding task ended");
+        });
+
+        info!("All background tasks spawned successfully");
     }
 }
 
 #[async_trait]
 impl EventHandler for BridgeHandler {
     async fn message(&self, ctx: Context, msg: Message) {
-        // Ignore our own messages
-        if msg.author.id == ctx.cache.current_user().id {
-            return;
-        }
-
-        // Ignore bots
-        if msg.author.bot {
+        // Ignore our own messages and bots
+        if msg.author.id == ctx.cache.current_user().id || msg.author.bot {
             return;
         }
 
@@ -93,102 +350,96 @@ impl EventHandler for BridgeHandler {
             return;
         }
 
+        // Get resolved state (if available)
+        let resolved = {
+            let guard = self.resolved_state.lock().unwrap();
+            guard.clone()
+        };
+
+        let Some(state) = resolved else {
+            // State not resolved yet, ignore message
+            debug!("Ignoring message - state not yet resolved");
+            return;
+        };
+
+        // Create context for Discord -> WoW handling
+        let d2w_ctx = DiscordToWowContext::from_resolved(&state);
+
         // Check for !commands first
-        if content.len() <= 100 && (content.starts_with('!') || content.starts_with('?'))  {
-            // Check if commands are enabled for this channel
-            let should_handle = {
-                let data = ctx.data.read().await;
-                if let Some(state) = data.get::<BridgeState>() {
-                    let state = state.read().await;
-                    let channel_name = msg.channel_id.name(&ctx).await.unwrap_or_default();
-                    state.command_allowed_in_channel(&channel_name, msg.channel_id.get())
-                } else {
-                    false
-                }
-            };
-            if should_handle {
+        if content.len() <= 100 && (content.starts_with('!') || content.starts_with('?')) {
+            let channel_name = msg.channel_id.name(&ctx).await.unwrap_or_default();
+            if d2w_ctx.command_allowed_in_channel(&channel_name, msg.channel_id.get()) {
                 match self.command_handler.handle_command(&ctx, &msg, content).await {
                     Ok(true) => return, // Command was handled
-                    Ok(false) => {} // Not a known command, continue
+                    Ok(false) => {}     // Not a known command, continue
                     Err(e) => {
                         error!("Command handler error: {}", e);
                         return;
                     }
                 }
             }
-            // If commands not enabled for this channel, fall through to regular message handling
         }
 
-        if content.len() <= 100 && content.starts_with('.')  {
-            let data = ctx.data.read().await;
-            if let Some(state) = data.get::<BridgeState>() {
-                let state = state.read().await;
-                let channel_name = msg.channel_id.name(&ctx).await.unwrap_or_default();
-                let should_send_directly = state.should_send_dot_command_directly(content)
-                    && state.command_allowed_in_channel(&channel_name, msg.channel_id.get());
-                if should_send_directly {
-                    if let Some(bridge) = data.get::<Bridge>() {
-                        let discord_msg = DiscordMessage {
-                            sender: "".to_string(),
-                            content: content.to_string(),
-                            channel_id: msg.channel_id.get(),
-                            channel_name: "".to_string(),
-                        };
-                        let outgoing = bridge.handle_discord_to_wow_directly(&discord_msg);
-                        if let Some(msg) = outgoing {
-                            if let Err(e) = state.wow_tx.send(msg) {
-                                error!("Failed to send message to WoW: {}", e);
-                            }
-                        }
+        // Check for .dot commands
+        if content.len() <= 100 && content.starts_with('.') {
+            let channel_name = msg.channel_id.name(&ctx).await.unwrap_or_default();
+            let should_send_directly = d2w_ctx.should_send_dot_command_directly(content)
+                && d2w_ctx.command_allowed_in_channel(&channel_name, msg.channel_id.get());
+
+            if should_send_directly {
+                let discord_msg = DiscordMessage {
+                    sender: "".to_string(),
+                    content: content.to_string(),
+                    channel_id: msg.channel_id.get(),
+                    channel_name: "".to_string(),
+                };
+                if let Some(outgoing) = self.bridge.handle_discord_to_wow_directly(&discord_msg) {
+                    if let Err(e) = d2w_ctx.wow_tx.send(outgoing) {
+                        error!("Failed to send dot command to WoW: {}", e);
                     }
-                    return;
                 }
+                return;
             }
         }
 
-        // Process as a regular message using the Bridge for filtering and routing
-        let data = ctx.data.read().await;
-        if let Some(bridge) = data.get::<Bridge>() {
-            if let Some(state) = data.get::<BridgeState>() {
-                let state = state.read().await;
+        // Process as a regular message
+        // Get effective display name
+        let sender = msg
+            .member
+            .as_ref()
+            .and_then(|m| m.nick.clone())
+            .unwrap_or_else(|| msg.author.name.clone());
 
-                // Get effective display name
-                let sender = msg
-                    .member
-                    .as_ref()
-                    .and_then(|m| m.nick.clone())
-                    .unwrap_or_else(|| msg.author.name.clone());
+        // Build message content including attachments
+        let mut full_content = content.to_string();
+        for attachment in &msg.attachments {
+            if !full_content.is_empty() {
+                full_content.push(' ');
+            }
+            full_content.push_str(&attachment.url);
+        }
 
-                // Build message content including attachments
-                let mut full_content = content.to_string();
-                for attachment in &msg.attachments {
-                    if !full_content.is_empty() {
-                        full_content.push(' ');
-                    }
-                    full_content.push_str(&attachment.url);
-                }
+        // Process the message (resolve emojis, mentions, etc.)
+        let processed = d2w_ctx
+            .resolver
+            .process_discord_to_wow(&full_content, &ctx.cache);
 
-                // Process the message (resolve emojis, mentions, etc.)
-                let processed = state.resolver.process_discord_to_wow(&full_content, &ctx.cache);
+        // Create DiscordMessage and use Bridge to process, filter, and format
+        let discord_msg = DiscordMessage {
+            sender: sender.clone(),
+            content: processed,
+            channel_id: msg.channel_id.get(),
+            channel_name: d2w_ctx
+                .discord_to_wow
+                .get(&msg.channel_id)
+                .map(|c| c.discord_channel_name.clone())
+                .unwrap_or_default(),
+        };
 
-                // Create DiscordMessage and use Bridge to process, filter, and format
-                let discord_msg = DiscordMessage {
-                    sender: sender.clone(),
-                    content: processed,
-                    channel_id: msg.channel_id.get(),
-                    channel_name: state
-                        .discord_to_wow
-                        .get(&msg.channel_id)
-                        .map(|c| c.discord_channel_name.clone())
-                        .unwrap_or_default(),
-                };
-
-                let outgoing = bridge.handle_discord_to_wow(&discord_msg);
-                for msg in outgoing {
-                    if let Err(e) = state.wow_tx.send(msg) {
-                        error!("Failed to send message to WoW: {}", e);
-                    }
-                }
+        let outgoing = self.bridge.handle_discord_to_wow(&discord_msg);
+        for wow_msg in outgoing {
+            if let Err(e) = d2w_ctx.wow_tx.send(wow_msg) {
+                error!("Failed to send message to WoW: {}", e);
             }
         }
     }
@@ -196,317 +447,102 @@ impl EventHandler for BridgeHandler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!("Discord bot connected as {}", ready.user.name);
 
-        // Store our user ID and HTTP client, then wait for guild data
-        let self_user_id = ready.user.id.get();
-        {
-            let data = ctx.data.read().await;
-            if let Some(state) = data.get::<BridgeState>() {
-                let mut state = state.write().await;
-                state.http = Some(ctx.http.clone());
-                state.self_user_id = Some(self_user_id);
+        // Send ready data to guild_create
+        let ready_data = ReadyData {
+            self_user_id: ready.user.id.get(),
+        };
 
-                info!("Connected to Discord. Waiting for guild data to resolve channels...");
-                info!("Pending channels to resolve: {}", state.pending_channel_configs.len());
+        let tx = {
+            let mut guard = self.ready_tx.lock().unwrap();
+            guard.take()
+        };
+
+        if let Some(tx) = tx {
+            if tx.send(ready_data).is_err() {
+                error!("Failed to send ready data - receiver dropped");
             }
         }
 
-        // Start status update task
-        let status_rx = Arc::clone(&self.status_rx);
-        let status_ctx = ctx.clone();
+        info!("Waiting for guild data to resolve channels...");
 
-        tokio::spawn(async move {
-            let mut rx = status_rx.lock().await;
-
-            while let Some(status) = rx.recv().await {
-                use crate::common::ActivityStatus;
-                use serenity::gateway::ActivityData;
-
-                match status {
-                    ActivityStatus::Connecting => {
-                        let activity = ActivityData::custom("Connecting...");
-                        status_ctx.set_activity(Some(activity));
-                    },
-                    ActivityStatus::Disconnected => {
-                        let activity = ActivityData::custom("Offline");
-                        status_ctx.set_activity(Some(activity));
-                    },
-                    ActivityStatus::ConnectedToRealm(realm) => {
-                        let activity = ActivityData::custom(realm);
-                        status_ctx.set_activity(Some(activity));
-                    },
-                    ActivityStatus::GuildStats { online_count } => {
-                        let plural = if online_count == 1 { "" } else { "s" };
-                        let text = if online_count == 0 {
-                            "Currently no guildies online".to_string()
-                        } else {
-                            format!("{} guildie{} online", online_count, plural)
-                        };
-                        let activity = ActivityData::watching(text);
-                        status_ctx.set_activity(Some(activity));
-                    },
-                }
-            }
-
-            info!("Status update task ended");
-        });
-
-        // Start dashboard update task
-        let dashboard_rx = Arc::clone(&self.dashboard_rx);
-        let dashboard_ctx = ctx.clone();
-        let dashboard_config = self.dashboard_config.clone();
-        let dashboard_data_ref = ctx.data.clone();
-        let mut shutdown_rx = self.shutdown_rx.clone();
-
-        tokio::spawn(async move {
-            let mut rx = dashboard_rx.lock().await;
-            let mut dashboard = DashboardRenderer::new(dashboard_config);
-
-            loop {
-                tokio::select! {
-                    event_opt = rx.recv() => {
-                        match event_opt {
-                            Some(event) => {
-                                // Check shutdown first
-                                if *shutdown_rx.borrow() {
-                                    break;
-                                }
-
-                                // Get resolved channel ID from BridgeState
-                                let channel_id = {
-                                    let data = dashboard_data_ref.read().await;
-                                    if let Some(state) = data.get::<BridgeState>() {
-                                        let state = state.read().await;
-                                        state.dashboard_channel_id
-                                    } else {
-                                        None
-                                    }
-                                };
-
-                                match event {
-                                    DashboardEvent::Update(data) => {
-                                        dashboard.update(&dashboard_ctx, channel_id, data).await;
-                                    },
-                                    DashboardEvent::SetOffline => {
-                                        dashboard.set_offline(&dashboard_ctx, channel_id).await;
-                                    }
-                                }
-                            }
-                            None => break, // Channel closed
-                        }
-                    }
-                    _ = shutdown_rx.changed() => {
-                        if *shutdown_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            info!("Dashboard update task ended");
-        });
-
-
-        // Start WoW -> Discord forwarding task
-        let wow_rx = Arc::clone(&self.wow_rx);
-        let http = ctx.http.clone();
-        let cache = ctx.cache.clone();
-        let data = ctx.data.clone();
-
-        tokio::spawn(async move {
-            let mut rx = wow_rx.lock().await;
-
-            while let Some(msg) = rx.recv().await {
-                let data = data.read().await;
-                if let Some(bridge) = data.get::<Bridge>() {
-                    if let Some(state) = data.get::<BridgeState>() {
-                        let state = state.read().await;
-                        let self_user_id = state.self_user_id.unwrap_or(0);
-                        let enable_tag_notifications = state.enable_tag_failed_notifications;
-
-                        // Pre-process WoW content (resolve links, strip colors/textures) BEFORE formatting
-                        let processed_content = state.resolver.process_pre_bridge(&msg.content);
-
-                        // Process and filter message through Bridge (with optional format override)
-                        let results = bridge.handle_wow_to_discord(
-                            msg.chat_type,
-                            msg.channel_name.as_deref(),
-                            msg.sender.as_deref(),
-                            &processed_content,
-                            msg.format.as_deref(),
-                            msg.guild_event.as_ref(),
-                        );
-
-                        // Send filtered messages to appropriate Discord channels
-                        for (discord_channel_name, formatted) in results {
-                            // Find the Discord channel ID from state
-                            if let Some(channel_configs) = state.wow_to_discord.get(&(
-                                msg.chat_type,
-                                msg.channel_name.as_ref().map(|s| s.to_lowercase()),
-                            )) {
-                                for config in channel_configs {
-                                    if config.discord_channel_name == discord_channel_name {
-                                        if let Some(channel_id) = config.discord_channel_id {
-                                        // Apply post-bridge processing (emojis, tags, markdown escape)
-                                        let (final_message, tag_errors) = if msg.sender.is_some() {
-                                            let result = state.resolver.process_post_bridge(
-                                                &cache,
-                                                channel_id,
-                                                &formatted,
-                                                self_user_id,
-                                            );
-                                            (result.message, result.errors)
-                                        } else {
-                                            (formatted.clone(), Vec::new())
-                                        };
-
-                                            // Send the message to Discord
-                                            match channel_id.say(&http, &final_message).await {
-                                                Ok(_) => {
-                                                    debug!(
-                                                        "Sent to Discord #{}: {}",
-                                                        discord_channel_name, final_message
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    error!("Failed to send to Discord channel {}: {}", discord_channel_name, e);
-                                                }
-                                            }
-
-                                            // Handle tag resolution errors
-                                            if enable_tag_notifications && !tag_errors.is_empty() {
-                                                for error_msg in &tag_errors {
-                                                    // Send error to Discord channel
-                                                    if let Err(e) = channel_id.say(&http, error_msg).await {
-                                                        warn!("Failed to send tag error to Discord: {}", e);
-                                                    }
-
-                                                    // Send whisper back to WoW sender
-                                                    if let Some(ref sender) = msg.sender {
-                                                        let whisper_msg = BridgeMessage {
-                                                            sender: None,
-                                                            content: error_msg.clone(),
-                                                            chat_type: 7, // CHAT_MSG_WHISPER
-                                                            channel_name: Some(sender.clone()),
-                                                            format: None,
-                                                            guild_event: None,
-                                                        };
-                                                        if let Err(e) = state.wow_tx.send(whisper_msg) {
-                                                            warn!("Failed to send tag error whisper to WoW: {}", e);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            info!("WoW -> Discord forwarding task ended");
-        });
-
-        // Start command response forwarding task
-        let cmd_response_rx = Arc::clone(&self.cmd_response_rx);
-        let cmd_http = ctx.http.clone();
-        let cmd_data = ctx.data.clone();
-        let mut shutdown_rx_cmd = self.shutdown_rx.clone();
-
-        tokio::spawn(async move {
-            let mut rx = cmd_response_rx.lock().await;
-
-            loop {
-                tokio::select! {
-                    response_opt = rx.recv() => {
-                        match response_opt {
-                            Some(response) => {
-                                // Check shutdown first
-                                if *shutdown_rx_cmd.borrow() {
-                                    break;
-                                }
-
-                                let data = cmd_data.read().await;
-                                if let Some(bridge) = data.get::<Bridge>() {
-                                    if let Some(state) = data.get::<BridgeState>() {
-                                        let state = state.read().await;
-
-                                        // Apply bridge formatting (e.g., MOTD format)
-                                        let formatted = bridge.format_command_response(&response.content);
-
-                                        // Apply post-bridge processing (emojis, markdown escape)
-                                        let result = state.resolver.process_post_bridge(
-                                            &ctx.cache,
-                                            serenity::model::id::ChannelId::new(response.channel_id),
-                                            &formatted,
-                                            state.self_user_id.unwrap_or(0),
-                                        );
-
-                                        // Send to Discord
-                                        use serenity::model::id::ChannelId;
-                                        let channel = ChannelId::new(response.channel_id);
-                                        if let Err(e) = channel.say(&cmd_http, &result.message).await {
-                                            error!("Failed to send command response to Discord: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                            None => break, // Channel closed
-                        }
-                    }
-                    _ = shutdown_rx_cmd.changed() => {
-                        if *shutdown_rx_cmd.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-            info!("Command response forwarding task ended");
-        });
+        // NOTE: We don't spawn background tasks here.
+        // They are spawned in guild_create() after state resolution.
+        let _ = ctx; // Silence unused warning - ctx is used in guild_create
     }
 
     async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: Option<bool>) {
-        info!("Received guild data for '{}' ({} channels)", guild.name, guild.channels.len());
+        info!(
+            "Received guild data for '{}' ({} channels)",
+            guild.name,
+            guild.channels.len()
+        );
 
-        let data = ctx.data.read().await;
-        if let Some(state) = data.get::<BridgeState>() {
-            let mut state = state.write().await;
+        // Wait for ready data
+        let ready_rx = {
+            let mut guard = self.ready_rx.lock().unwrap();
+            guard.take()
+        };
 
-            // Get channel names for logging
-            let _channel_names: Vec<String> = guild.channels.values()
-                .map(|ch| ch.name.clone())
-                .collect();
-
-            // Convert HashMap values to Vec for resolution
-            let guild_channels: Vec<GuildChannel> = guild.channels.values().cloned().collect();
-
-            // Log what channels we're looking for
-            let pending_names: Vec<String> = state.pending_channel_configs.iter()
-                .map(|(name, _, _)| name.clone())
-                .collect();
-
-            let resolved = state.resolve_discord_channels(&guild_channels);
-            info!("Resolved {} Discord channels from guild '{}'", resolved, guild.name);
-
-            if resolved > 0 {
-                info!("Successfully resolved channels: {:?}", 
-                    guild_channels.iter()
-                        .filter(|ch| pending_names.contains(&ch.name))
-                        .map(|ch| format!("{} -> {}", ch.name, ch.id))
-                        .collect::<Vec<_>>()
-                );
+        let ready_data = match ready_rx {
+            Some(rx) => match rx.await {
+                Ok(data) => data,
+                Err(_) => {
+                    error!("Failed to receive ready data - sender dropped");
+                    return;
+                }
+            },
+            None => {
+                // Already processed in a previous guild_create call
+                debug!("State already resolved, skipping duplicate guild_create");
+                return;
             }
+        };
 
-            // Log remaining unresolved
-            if !state.pending_channel_configs.is_empty() {
-                let remaining: Vec<String> = state.pending_channel_configs.iter()
-                    .map(|(name, _, _)| name.clone())
-                    .collect();
-                info!("Still waiting to resolve channels: {:?}", remaining);
-            } else {
-                info!("All Discord channels resolved successfully");
-            }
+        // Take pending state
+        let pending_state = {
+            let mut guard = self.pending_state.lock().unwrap();
+            guard.take()
+        };
+
+        let Some(pending) = pending_state else {
+            debug!("Pending state already consumed");
+            return;
+        };
+
+        // Take task channels
+        let task_channels = {
+            let mut guard = self.task_channels.lock().unwrap();
+            guard.take()
+        };
+
+        let Some(channels) = task_channels else {
+            error!("Task channels already consumed");
+            return;
+        };
+
+        // Log pending channel configs
+        let pending_names: Vec<&str> = pending
+            .pending_channel_configs
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        info!("Resolving {} pending channels: {:?}", pending_names.len(), pending_names);
+
+        // Convert HashMap values to Vec for resolution
+        let guild_channels: Vec<_> = guild.channels.values().cloned().collect();
+
+        // Resolve state
+        let resolved = pending.resolve(&guild_channels, ctx.http.clone(), ready_data.self_user_id);
+
+        // Store resolved state for message handler
+        {
+            let mut guard = self.resolved_state.lock().unwrap();
+            *guard = Some(Arc::new(resolved.clone()));
         }
+
+        // Spawn background tasks with owned contexts
+        self.spawn_background_tasks(&ctx, &resolved, channels);
+
+        info!("Bridge initialization complete - all systems operational");
     }
 }
