@@ -66,11 +66,6 @@ impl MessageFilter {
             })
         })
     }
-
-    /// Returns true if the filter has any patterns configured.
-    pub fn has_patterns(&self) -> bool {
-        !self.wow_to_discord_patterns.is_empty() || !self.discord_to_wow_patterns.is_empty()
-    }
 }
 
 /// Compile a list of regex pattern strings, skipping invalid ones.

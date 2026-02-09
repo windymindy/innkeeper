@@ -7,9 +7,8 @@ use emojis;
 use fancy_regex::Regex;
 use serenity::cache::Cache;
 use serenity::model::id::ChannelId;
-use std::sync::OnceLock;
 
-use crate::common::resources::{get_achievements, LINK_SITE};
+use crate::common::resources::{get_achievement_name, LINK_SITE};
 
 /// Result of resolving tags in a message.
 #[derive(Debug, Clone)]
@@ -31,6 +30,18 @@ pub struct MessageResolver {
     color_end_pattern: Regex,
     /// Pattern for texture coding.
     texture_pattern: Regex,
+    /// Pattern for Discord user mentions (<@123> or <@!123>).
+    mention_pattern: Regex,
+    /// Pattern for Discord channel mentions (<#123>).
+    channel_pattern: Regex,
+    /// Pattern for Discord role mentions (<@&123>).
+    role_pattern: Regex,
+    /// Pattern for Discord custom emojis (<:name:id> or <a:name:id>).
+    emoji_pattern: Regex,
+    /// Patterns for @tag resolution (quoted and simple).
+    tag_patterns: Vec<Regex>,
+    /// Pattern for preserving Discord mentions during markdown escape.
+    mention_preserve_pattern: Regex,
     /// Whether to enable markdown (disable escaping).
     enable_markdown: bool,
 }
@@ -73,6 +84,17 @@ impl MessageResolver {
             color_pattern: Regex::new(r"\|c[0-9a-fA-F]{8}(.*?)\|r").unwrap(),
             color_end_pattern: Regex::new(r"\|c[0-9a-fA-F]{8}").unwrap(),
             texture_pattern: Regex::new(r"\|T(.*?)\|t").unwrap(),
+            mention_pattern: Regex::new(r"<@!?(\d+)>").unwrap(),
+            channel_pattern: Regex::new(r"<#(\d+)>").unwrap(),
+            role_pattern: Regex::new(r"<@&(\d+)>").unwrap(),
+            emoji_pattern: Regex::new(r"<a?:([a-zA-Z0-9_]+):\d+>").unwrap(),
+            tag_patterns: vec![
+                // Quoted tag: "@name with spaces"
+                Regex::new(r#""@(.+?)""#).unwrap(),
+                // Simple tag: @name
+                Regex::new(r"@([\w]+)").unwrap(),
+            ],
+            mention_preserve_pattern: Regex::new(r"<@[&!]?\d+>").unwrap(),
             enable_markdown,
         }
     }
@@ -210,10 +232,7 @@ impl MessageResolver {
     ///
     /// Converts <@123456789> to @username
     pub fn resolve_mentions_to_text(&self, message: &str, cache: &Cache) -> String {
-        static MENTION_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let pattern = MENTION_PATTERN.get_or_init(|| Regex::new(r"<@!?(\d+)>").unwrap());
-
-        pattern
+        self.mention_pattern
             .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 if let Ok(user_id) = caps[1].parse::<u64>() {
                     if let Some(user) = cache.user(serenity::model::id::UserId::new(user_id)) {
@@ -227,10 +246,7 @@ impl MessageResolver {
 
     /// Convert Discord channel mentions to plain text.
     pub fn resolve_channel_mentions(&self, message: &str, cache: &Cache) -> String {
-        static CHANNEL_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let pattern = CHANNEL_PATTERN.get_or_init(|| Regex::new(r"<#(\d+)>").unwrap());
-
-        pattern
+        self.channel_pattern
             .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 if let Ok(channel_id) = caps[1].parse::<u64>() {
                     let channel_id = serenity::model::id::ChannelId::new(channel_id);
@@ -250,10 +266,7 @@ impl MessageResolver {
 
     /// Convert Discord role mentions to plain text.
     pub fn resolve_role_mentions(&self, message: &str, cache: &Cache) -> String {
-        static ROLE_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let pattern = ROLE_PATTERN.get_or_init(|| Regex::new(r"<@&(\d+)>").unwrap());
-
-        pattern
+        self.role_pattern
             .replace_all(message, |caps: &fancy_regex::Captures| -> String {
                 if let Ok(role_id) = caps[1].parse::<u64>() {
                     // Find the role in any guild
@@ -274,11 +287,7 @@ impl MessageResolver {
 
     /// Convert Discord custom emojis to text representation.
     pub fn resolve_custom_emojis_to_text(&self, message: &str) -> String {
-        static EMOJI_PATTERN: OnceLock<Regex> = OnceLock::new();
-        let pattern =
-            EMOJI_PATTERN.get_or_init(|| Regex::new(r"<a?:([a-zA-Z0-9_]+):\d+>").unwrap());
-
-        pattern.replace_all(message, ":$1:").to_string()
+        self.emoji_pattern.replace_all(message, ":$1:").to_string()
     }
 
     /// Convert Unicode emojis to text aliases (e.g., 😀 -> :grinning:).
@@ -376,12 +385,8 @@ impl MessageResolver {
     ///
     /// Looks up the achievement name from the achievements database and formats
     /// a clickable link for Discord.
-    pub fn resolve_achievement_id(achievement_id: u32) -> String {
-        let achievements = get_achievements();
-        let name = achievements
-            .get(&achievement_id)
-            .map(|s| s.as_str())
-            .unwrap_or_else(|| "Unknown Achievement");
+    pub fn format_achievement_link(achievement_id: u32) -> String {
+        let name = get_achievement_name(achievement_id).unwrap_or("Unknown Achievement");
         format!(
             "[{}] (<{}?achievement={}>)",
             name, LINK_SITE, achievement_id
@@ -407,16 +412,6 @@ impl MessageResolver {
         message: &str,
         self_user_id: u64,
     ) -> TagResolutionResult {
-        static TAG_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-        let patterns = TAG_PATTERNS.get_or_init(|| {
-            vec![
-                // Quoted tag: "@name with spaces"
-                Regex::new(r#""@(.+?)""#).unwrap(),
-                // Simple tag: @name
-                Regex::new(r"@([\w]+)").unwrap(),
-            ]
-        });
-
         let mut errors = Vec::new();
 
         // Collect channel members and roles for matching
@@ -465,7 +460,7 @@ impl MessageResolver {
         // Process each pattern
         let mut result = message.to_string();
 
-        for pattern in patterns {
+        for pattern in &self.tag_patterns {
             result = pattern
                 .replace_all(&result, |caps: &fancy_regex::Captures| -> String {
                     let tag = &caps[1];
@@ -657,15 +652,16 @@ impl MessageResolver {
             return message.to_string();
         }
         // We need to escape markdown but NOT the <@id> or <@&id> mentions
-        static MENTION_PLACEHOLDER: OnceLock<Regex> = OnceLock::new();
-        let mention_pattern =
-            MENTION_PLACEHOLDER.get_or_init(|| Regex::new(r"<@[&!]?\d+>").unwrap());
 
         // Find all mentions and their positions
         let mut mentions: Vec<(usize, usize, String)> = Vec::new();
         let message_clone = message.to_string();
 
-        for caps in mention_pattern.captures_iter(&message_clone).flatten() {
+        for caps in self
+            .mention_preserve_pattern
+            .captures_iter(&message_clone)
+            .flatten()
+        {
             if let Some(m) = caps.get(0) {
                 mentions.push((m.start(), m.end(), m.as_str().to_string()));
             }
@@ -796,15 +792,15 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_achievement_id() {
+    fn test_format_achievement_link() {
         // Test known achievement (Level 10 = ID 6)
-        let output = MessageResolver::resolve_achievement_id(6);
+        let output = MessageResolver::format_achievement_link(6);
         assert!(output.contains("Level 10"));
         assert!(output.contains("db.ascension.gg"));
         assert!(output.contains("achievement=6"));
 
         // Test unknown achievement
-        let output = MessageResolver::resolve_achievement_id(999999999);
+        let output = MessageResolver::format_achievement_link(999999999);
         assert!(output.contains("Unknown Achievement"));
     }
 

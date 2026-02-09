@@ -58,7 +58,7 @@ impl Bridge {
     }
 
     /// Get the list of custom channels to join in WoW.
-    pub fn channels_to_join(&self) -> Vec<&str> {
+    pub fn channels_to_join(&self) -> Vec<String> {
         self.router.get_channels_to_join()
     }
 
@@ -250,7 +250,11 @@ impl Bridge {
             }
         }
 
-        let routes = self.router.get_discord_targets(chat_type, channel_name);
+        // Lowercase channel name once here to avoid allocation in get_discord_targets
+        let channel_name_lower = channel_name.map(|s| s.to_lowercase());
+        let routes = self
+            .router
+            .get_discord_targets(chat_type, channel_name_lower.as_deref());
 
         if routes.is_empty() {
             debug!(chat_type, channel_name, "No Discord route for WoW message");
@@ -287,7 +291,7 @@ impl Bridge {
             let achievement = guild_event
                 .as_ref()
                 .and_then(|e| e.achievement_id)
-                .map(|id| MessageResolver::resolve_achievement_id(id))
+                .map(MessageResolver::format_achievement_link)
                 .unwrap_or_default();
 
             let ctx = FormatContext::new(sender.unwrap_or(""), content)
@@ -672,10 +676,17 @@ impl MessageRouter {
     }
 
     /// Get Discord channels that should receive a message from the given WoW channel.
-    pub fn get_discord_targets(&self, chat_type: u8, channel_name: Option<&str>) -> Vec<&Route> {
+    ///
+    /// **Important**: `channel_name` must be pre-lowercased by the caller to avoid
+    /// allocation on every lookup. Keys are stored lowercase at config load time.
+    pub fn get_discord_targets(
+        &self,
+        chat_type: u8,
+        channel_name_lowercase: Option<&str>,
+    ) -> Vec<&Route> {
         let key = WowChannelKey {
             chat_type,
-            channel_name: channel_name.map(|s| s.to_lowercase()),
+            channel_name: channel_name_lowercase.map(str::to_string),
         };
 
         self.wow_to_discord
@@ -693,12 +704,12 @@ impl MessageRouter {
     }
 
     /// Get custom channel names that need to be joined.
-    pub fn get_channels_to_join(&self) -> Vec<&str> {
+    pub fn get_channels_to_join(&self) -> Vec<String> {
         self.routes
             .iter()
             .filter_map(|r| {
                 if r.chat_type == ChatType::Channel {
-                    r.wow_channel_name.as_deref()
+                    r.wow_channel_name.clone()
                 } else {
                     None
                 }
@@ -909,16 +920,12 @@ mod tests {
 
         let router = MessageRouter::from_config(&config);
 
-        // Should match with channel name
-        let targets = router.get_discord_targets(chat_events::CHAT_MSG_CHANNEL, Some("World"));
-        assert_eq!(targets.len(), 1);
-
-        // Case insensitive
+        // Should match with channel name (lowercase required by API contract)
         let targets = router.get_discord_targets(chat_events::CHAT_MSG_CHANNEL, Some("world"));
         assert_eq!(targets.len(), 1);
 
         // Different channel name should not match
-        let targets = router.get_discord_targets(chat_events::CHAT_MSG_CHANNEL, Some("Trade"));
+        let targets = router.get_discord_targets(chat_events::CHAT_MSG_CHANNEL, Some("trade"));
         assert_eq!(targets.len(), 0);
     }
 
@@ -973,8 +980,8 @@ mod tests {
         let channels = router.get_channels_to_join();
 
         assert_eq!(channels.len(), 2);
-        assert!(channels.contains(&"World"));
-        assert!(channels.contains(&"Trade"));
+        assert!(channels.contains(&"World".to_string()));
+        assert!(channels.contains(&"Trade".to_string()));
     }
 
     #[test]

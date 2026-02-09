@@ -3,7 +3,8 @@
 //! This module defines the single source of truth for message types
 //! used in communication between Discord and WoW.
 
-use crate::common::types::GuildMember;
+use crate::common::types::{ChatMessage, GuildMember};
+use crate::protocol::game::chat::chat_events;
 
 /// Guild event data extracted from SMSG_GUILD_EVENT.
 #[derive(Debug, Clone)]
@@ -37,6 +38,45 @@ pub struct BridgeMessage {
     pub format: Option<String>,
     /// Guild event information for filtering and formatting.
     pub guild_event: Option<GuildEventInfo>,
+}
+
+impl BridgeMessage {
+    /// Create a system message (no sender, system chat type).
+    pub fn system(content: String) -> Self {
+        Self {
+            sender: None,
+            content,
+            chat_type: chat_events::CHAT_MSG_SYSTEM,
+            channel_name: None,
+            format: None,
+            guild_event: None,
+        }
+    }
+
+    /// Create a guild event message.
+    pub fn guild_event(event: GuildEventInfo, content: String) -> Self {
+        Self {
+            sender: Some(event.player_name.clone()),
+            content,
+            chat_type: chat_events::CHAT_MSG_GUILD,
+            channel_name: None,
+            format: None,
+            guild_event: Some(event),
+        }
+    }
+}
+
+impl From<ChatMessage> for BridgeMessage {
+    fn from(msg: ChatMessage) -> Self {
+        Self {
+            sender: Some(msg.sender_name),
+            content: msg.content,
+            chat_type: msg.chat_type.to_id(),
+            channel_name: msg.channel_name,
+            format: msg.format,
+            guild_event: None,
+        }
+    }
 }
 
 /// Message from Discord to be processed by the bridge.

@@ -32,18 +32,6 @@ pub struct GuildMember {
     pub officer_note: String,
 }
 
-/// Result from a WHO query (SMSG_WHO).
-#[derive(Debug, Clone)]
-pub struct WhoResponse {
-    pub player_name: String,
-    pub guild_name: String,
-    pub level: u8,
-    pub class: Option<Class>,
-    pub race: Option<Race>,
-    pub gender: u8,
-    pub zone_id: u32,
-}
-
 /// Type of chat message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatType {

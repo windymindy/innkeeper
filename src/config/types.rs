@@ -644,44 +644,32 @@ impl Config {
         self.wow.enable_server_motd
     }
 
+    /// Get the guild event configuration for an event type.
+    fn get_guild_event_config(&self, event: &str) -> Option<&GuildEventConfig> {
+        match event {
+            "online" => self.guild.online.as_ref(),
+            "offline" => self.guild.offline.as_ref(),
+            "promoted" => self.guild.promoted.as_ref(),
+            "demoted" => self.guild.demoted.as_ref(),
+            "joined" => self.guild.joined.as_ref(),
+            "left" => self.guild.left.as_ref(),
+            "removed" => self.guild.removed.as_ref(),
+            "motd" => self.guild.motd.as_ref(),
+            "achievement" => self.guild.achievement.as_ref(),
+            _ => None,
+        }
+    }
+
     /// Check if guild event is enabled.
     pub fn is_guild_event_enabled(&self, event: &str) -> bool {
-        let event_config = match event {
-            "online" => &self.guild.online,
-            "offline" => &self.guild.offline,
-            "promoted" => &self.guild.promoted,
-            "demoted" => &self.guild.demoted,
-            "joined" => &self.guild.joined,
-            "left" => &self.guild.left,
-            "removed" => &self.guild.removed,
-            "motd" => &self.guild.motd,
-            "achievement" => &self.guild.achievement,
-            _ => &None,
-        };
-        if let Some(ref config) = event_config {
-            return config.enabled;
-        }
-        false
+        self.get_guild_event_config(event)
+            .map_or(false, |c| c.enabled)
     }
 
     /// Get format for a guild event.
     pub fn get_guild_event_format(&self, event: &str) -> Option<String> {
-        let event_config = match event {
-            "online" => &self.guild.online,
-            "offline" => &self.guild.offline,
-            "promoted" => &self.guild.promoted,
-            "demoted" => &self.guild.demoted,
-            "joined" => &self.guild.joined,
-            "left" => &self.guild.left,
-            "removed" => &self.guild.removed,
-            "motd" => &self.guild.motd,
-            "achievement" => &self.guild.achievement,
-            _ => &None,
-        };
-        if let Some(ref config) = event_config {
-            return config.format.clone();
-        }
-        None
+        self.get_guild_event_config(event)
+            .and_then(|c| c.format.clone())
     }
 }
 

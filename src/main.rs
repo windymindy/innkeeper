@@ -162,11 +162,7 @@ async fn main() -> Result<()> {
     // ============================================================
     // Start Game client in separate task
     // ============================================================
-    let channels_to_join: Vec<String> = bridge
-        .channels_to_join()
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let channels_to_join = bridge.channels_to_join();
 
     // Prepare for loop
     use common::reconnect::{ReconnectConfig, ReconnectState};
