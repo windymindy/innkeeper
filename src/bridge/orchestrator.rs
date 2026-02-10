@@ -13,7 +13,10 @@ use crate::common::types::{ChatType, GuildMember};
 use crate::common::{BridgeMessage, CommandResponseData, DiscordMessage};
 use crate::config::types::{ChannelMapping, ChatConfig, Config, FiltersConfig, WowChannelConfig};
 use crate::discord::resolver::MessageResolver;
-use crate::game::formatter::{split_message, FormatContext, MessageFormatter};
+use crate::game::formatter::{
+    split_message, FormatContext, MessageFormatter, DEFAULT_DISCORD_TO_WOW_FORMAT,
+    DEFAULT_WOW_TO_DISCORD_FORMAT,
+};
 
 use super::filter::{FilterDirection, MessageFilter};
 
@@ -116,13 +119,7 @@ impl Bridge {
             };
 
             // Get format and create formatter
-            let format = route
-                .discord_to_wow_format
-                .as_ref()
-                .cloned()
-                .unwrap_or_else(|| "%user: %message".to_string());
-
-            let formatter = MessageFormatter::new(&format);
+            let formatter = MessageFormatter::new(route.discord_to_wow_format.as_str());
 
             // Calculate max message length and split if needed
             let max_len = formatter.max_message_length(&msg.sender, 255);
@@ -276,8 +273,7 @@ impl Bridge {
                         None
                     }
                 })
-                .or_else(|| route.wow_to_discord_format.clone())
-                .unwrap_or_else(|| "[%user]: %message".to_string());
+                .unwrap_or_else(|| route.wow_to_discord_format.clone());
 
             let formatter = MessageFormatter::new(&format);
             let target = guild_event
@@ -587,9 +583,9 @@ pub struct Route {
     /// Message flow direction.
     pub direction: Direction,
     /// Format string for messages from WoW (Discord side).
-    pub wow_to_discord_format: Option<String>,
+    pub wow_to_discord_format: String,
     /// Format string for messages from Discord (WoW side).
-    pub discord_to_wow_format: Option<String>,
+    pub discord_to_wow_format: String,
 }
 
 /// Message router that handles channel mappings.
@@ -636,9 +632,17 @@ impl MessageRouter {
                 discord_channel_name: mapping.discord.channel.clone(),
                 direction: Direction::from_str(&mapping.direction),
                 // discord.format is used for messages going TO Discord (WoW → Discord)
-                wow_to_discord_format: mapping.discord.format.clone(),
+                wow_to_discord_format: mapping
+                    .discord
+                    .format
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_WOW_TO_DISCORD_FORMAT.to_string()),
                 // wow.format is used for messages going TO WoW (Discord → WoW)
-                discord_to_wow_format: mapping.wow.format.clone(),
+                discord_to_wow_format: mapping
+                    .wow
+                    .format
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_DISCORD_TO_WOW_FORMAT.to_string()),
             };
 
             let idx = routes.len();

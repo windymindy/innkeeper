@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use backon::BackoffBuilder;
 use serenity::all::Http;
 use serenity::model::gateway::GatewayIntents;
 use serenity::Client;
@@ -180,13 +181,22 @@ impl DiscordBot {
 
     /// Run the Discord bot with automatic reconnection.
     pub async fn run(mut self) {
-        let mut retry_count = 0u32;
-        let max_retries = 10;
-        let base_delay = Duration::from_secs(5);
-        let max_delay = Duration::from_secs(300);
+        /// Create an exponential backoff iterator for Discord reconnection.
+        /// 5s initial, 5min max, factor 1.1, with jitter, unlimited retries.
+        fn discord_backoff() -> impl Iterator<Item = Duration> {
+            backon::ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(5))
+                .with_max_delay(Duration::from_mins(5))
+                .with_factor(1.1)
+                .with_jitter()
+                .without_max_times()
+                .build()
+        }
+
+        let mut backoff = discord_backoff();
 
         loop {
-            info!("Connecting to Discord... (attempt {})", retry_count + 1);
+            info!("Connecting to Discord...");
 
             let mut client = match self.client.take() {
                 Some(c) => c,
@@ -255,13 +265,8 @@ impl DiscordBot {
                         }
                         Err(e) => {
                             error!("Failed to rebuild Discord client: {}", e);
-                            retry_count += 1;
-                            if retry_count >= max_retries {
-                                error!("Max Discord reconnection attempts reached. Giving up.");
-                                break;
-                            }
-                            let delay = calculate_backoff(retry_count, base_delay, max_delay);
-                            warn!("Retrying in {:?}...", delay);
+                            let delay = backoff.next().unwrap_or(Duration::from_mins(5));
+                            warn!("Retrying in {:.1}s...", delay.as_secs_f64());
                             sleep(delay).await;
                             continue;
                         }
@@ -277,32 +282,14 @@ impl DiscordBot {
                 }
                 Err(e) => {
                     error!("Discord client error: {}", e);
-                    retry_count += 1;
-
-                    if retry_count >= max_retries {
-                        error!(
-                            "Max Discord reconnection attempts ({}) reached. Giving up.",
-                            max_retries
-                        );
-                        break;
-                    }
-
-                    let delay = calculate_backoff(retry_count, base_delay, max_delay);
+                    let delay = backoff.next().unwrap_or(Duration::from_mins(5));
                     warn!(
-                        "Discord disconnected. Reconnecting in {:?}... (attempt {}/{})",
-                        delay,
-                        retry_count + 1,
-                        max_retries
+                        "Discord disconnected. Reconnecting in {:.1}s...",
+                        delay.as_secs_f64(),
                     );
                     sleep(delay).await;
                 }
             }
         }
     }
-}
-
-/// Calculate exponential backoff delay with jitter.
-fn calculate_backoff(retry_count: u32, base_delay: Duration, max_delay: Duration) -> Duration {
-    let exp_delay = base_delay.saturating_mul(1 << retry_count.min(6));
-    std::cmp::min(exp_delay, max_delay)
 }

@@ -44,6 +44,7 @@ hocon-rs = "0.1"
 
 # Utilities
 anyhow = "1"
+backon = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fancy-regex = "0.11"

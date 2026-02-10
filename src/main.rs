@@ -152,11 +152,27 @@ async fn main() -> Result<()> {
     });
 
     info!("Waiting for Discord to connect and resolve channels...");
-    // Wait for Discord initialization to complete (or timeout after 60s)
-    match tokio::time::timeout(tokio::time::Duration::from_secs(60), init_complete_rx).await {
-        Ok(Ok(())) => info!("Discord initialization complete! Starting game client..."),
-        Ok(Err(_)) => warn!("Discord init signal sender was dropped before firing"),
-        Err(_) => warn!("Timed out waiting for Discord initialization (60s)"),
+    // Wait for Discord initialization to complete (or timeout after 15s)
+    let discord_init_success = match tokio::time::timeout(tokio::time::Duration::from_secs(15), init_complete_rx).await {
+        Ok(Ok(())) => {
+            info!("Discord initialization complete! Starting game client...");
+            true
+        }
+        Ok(Err(_)) => {
+            error!("Discord init signal sender was dropped before firing - initialization failed");
+            false
+        }
+        Err(_) => {
+            error!("Timed out waiting for Discord initialization (15s) - initialization failed");
+            false
+        }
+    };
+
+    if !discord_init_success {
+        error!("Failed to initialize Discord client - shutting down");
+        // Give a moment for error logs to flush
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        std::process::exit(1);
     }
 
     // ============================================================
@@ -165,8 +181,9 @@ async fn main() -> Result<()> {
     let channels_to_join = bridge.channels_to_join();
 
     // Prepare for loop
-    use common::reconnect::{ReconnectConfig, ReconnectState};
+    use backon::BackoffBuilder;
     use common::ActivityStatus;
+    use std::time::Duration;
 
     let realm_host = realm_host.to_string();
     let config_clone = config.clone();
@@ -174,6 +191,18 @@ async fn main() -> Result<()> {
     // Extract shutdown_tx before moving channels.game into the task
     let shutdown_tx = channels.control.shutdown_tx;
     let game_channels = channels.game;
+
+    /// Create an exponential backoff iterator for game reconnection.
+    /// 5s initial, 5min max, factor 1.1, with jitter, unlimited retries.
+    fn game_backoff() -> impl Iterator<Item = Duration> {
+        backon::ExponentialBuilder::default()
+            .with_min_delay(Duration::from_secs(5))
+            .with_max_delay(Duration::from_mins(5))
+            .with_factor(1.1)
+            .with_jitter()
+            .without_max_times()
+            .build()
+    }
 
     let mut game_task = tokio::spawn(async move {
         // Create client once
@@ -183,7 +212,7 @@ async fn main() -> Result<()> {
             channels_to_join,
         );
 
-        let mut reconnect_state = ReconnectState::new(ReconnectConfig::default());
+        let mut backoff = game_backoff();
 
         loop {
             // Check for shutdown before connecting
@@ -207,7 +236,7 @@ async fn main() -> Result<()> {
             ).await {
                 Ok(session) => {
                     info!("Realm authentication successful!");
-                    reconnect_state.reset();
+                    backoff = game_backoff(); // Reset backoff on successful connection
 
                     // Run game client
                     match game_client.run(session).await {
@@ -230,23 +259,19 @@ async fn main() -> Result<()> {
                 debug!("Dashboard channel closed: {}", e);
             }
 
-            // Calculate backoff
-            if let Some(delay) = reconnect_state.next_delay() {
-                info!("Reconnecting in {:.1} seconds...", delay.as_secs_f64());
+            // Calculate backoff delay
+            let delay = backoff.next().unwrap_or(Duration::from_mins(5));
+            info!("Reconnecting in {:.1} seconds...", delay.as_secs_f64());
 
-                // Wait for delay OR shutdown signal
-                tokio::select! {
-                    _ = tokio::time::sleep(delay) => {},
-                    _ = game_client.channels.shutdown_rx.changed() => {
-                        if *game_client.channels.shutdown_rx.borrow() {
-                            info!("Shutdown signal received during backoff");
-                            break;
-                        }
+            // Wait for delay OR shutdown signal
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {},
+                _ = game_client.channels.shutdown_rx.changed() => {
+                    if *game_client.channels.shutdown_rx.borrow() {
+                        info!("Shutdown signal received during backoff");
+                        break;
                     }
                 }
-            } else {
-                error!("Max reconnection attempts reached");
-                break;
             }
         }
     });

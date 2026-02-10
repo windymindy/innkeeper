@@ -549,7 +549,7 @@ impl EventHandler for BridgeHandler {
 
         info!("Bridge initialization complete - all systems operational");
 
-        // Signal main that initialization is done
+        // Signal main that initialization succeeded
         let tx = {
             let mut guard = self.init_complete_tx.lock().unwrap();
             guard.take()

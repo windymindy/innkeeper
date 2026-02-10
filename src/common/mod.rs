@@ -1,7 +1,6 @@
 //! Common utilities and types shared across the application.
 
 pub mod messages;
-pub mod reconnect;
 pub mod resources;
 pub mod types;
 
