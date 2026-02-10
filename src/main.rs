@@ -15,9 +15,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::signal;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
-use bridge::{BridgeChannels, BridgeCommand, BridgeMessage};
+use bridge::{BridgeCommand, BridgeMessage, ChannelBundle};
 use config::{load_and_validate, env::get_config_path};
 use discord::{
     DiscordBotBuilder, DiscordChannels, WowCommand,
@@ -63,10 +63,10 @@ async fn main() -> Result<()> {
     // ============================================================
 
     // Create bridge channels (single source of truth)
-    let (game_channels, wow_rx, command_tx, cmd_response_rx, shutdown_tx, status_rx, dashboard_rx) = BridgeChannels::new();
+    let channels = ChannelBundle::new();
 
     // Clone senders needed for Discord bot
-    let outgoing_wow_tx = game_channels.outgoing_wow_tx.clone();
+    let outgoing_wow_tx = channels.game.outgoing_wow_tx.clone();
 
     // WoW -> Discord forwarding channel
     let (wow_to_discord_tx, wow_to_discord_rx) = mpsc::unbounded_channel::<BridgeMessage>();
@@ -83,14 +83,17 @@ async fn main() -> Result<()> {
         outgoing_wow_tx: outgoing_wow_tx.clone(),
         wow_to_discord_rx,
         command_tx: discord_command_tx.clone(),
-        cmd_response_rx,
-        status_rx,
-        dashboard_rx,
-        shutdown_rx: game_channels.shutdown_rx.clone(),
+        cmd_response_rx: channels.discord.cmd_response_rx,
+        status_rx: channels.discord.status_rx,
+        dashboard_rx: channels.discord.dashboard_rx,
+        shutdown_rx: channels.game.shutdown_rx.clone(),
     };
 
+    // Create a one-shot channel to signal when Discord initialization is complete
+    let (init_complete_tx, init_complete_rx) = tokio::sync::oneshot::channel::<()>();
+
     let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels, bridge.clone())
-        .build()
+        .build(init_complete_tx)
         .await?;
 
     // ============================================================
@@ -99,7 +102,7 @@ async fn main() -> Result<()> {
 
     // Task 1: Game -> Discord forwarding
     let forward_to_discord = {
-        let mut game_rx = wow_rx;
+        let mut game_rx = channels.discord.wow_rx;
         let discord_tx = wow_to_discord_tx;
         tokio::spawn(async move {
             while let Some(msg) = game_rx.recv().await {
@@ -114,7 +117,7 @@ async fn main() -> Result<()> {
 
     // Task 2: Command converter (Discord commands -> Game commands)
     let command_converter = {
-        let cmd_tx = command_tx;
+        let cmd_tx = channels.discord.command_tx;
         tokio::spawn(async move {
             while let Some(cmd) = discord_command_rx.recv().await {
                 let bridge_cmd = match cmd {
@@ -144,19 +147,16 @@ async fn main() -> Result<()> {
     // because the game client needs channel mappings resolved from Discord
     // to route messages correctly.
 
-    // Create a one-shot channel to signal when Discord is ready
-    let (discord_ready_tx, discord_ready_rx) = tokio::sync::oneshot::channel::<()>();
-
     let discord_task = tokio::spawn(async move {
-        discord_bot.run_with_ready_signal(discord_ready_tx).await;
+        discord_bot.run().await;
     });
 
     info!("Waiting for Discord to connect and resolve channels...");
-    // Wait for Discord to be ready (or timeout after 60s)
-    match tokio::time::timeout(tokio::time::Duration::from_secs(60), discord_ready_rx).await {
-        Ok(Ok(())) => info!("Discord ready! Starting game client..."),
-        Ok(Err(_)) => warn!("Discord bot task dropped signal sender"),
-        Err(_) => warn!("Timed out waiting for Discord to become ready"),
+    // Wait for Discord initialization to complete (or timeout after 60s)
+    match tokio::time::timeout(tokio::time::Duration::from_secs(60), init_complete_rx).await {
+        Ok(Ok(())) => info!("Discord initialization complete! Starting game client..."),
+        Ok(Err(_)) => warn!("Discord init signal sender was dropped before firing"),
+        Err(_) => warn!("Timed out waiting for Discord initialization (60s)"),
     }
 
     // ============================================================
@@ -170,6 +170,10 @@ async fn main() -> Result<()> {
 
     let realm_host = realm_host.to_string();
     let config_clone = config.clone();
+
+    // Extract shutdown_tx before moving channels.game into the task
+    let shutdown_tx = channels.control.shutdown_tx;
+    let game_channels = channels.game;
 
     let mut game_task = tokio::spawn(async move {
         // Create client once
@@ -189,9 +193,9 @@ async fn main() -> Result<()> {
             }
 
             info!("Authenticating with realm server...");
-            // Send Connecting status
-            if let Err(_) = game_client.channels.status_tx.send(ActivityStatus::Connecting) {
-                // Receiver might be closed if shutting down
+            // Send Connecting status (may fail if shutting down)
+            if let Err(e) = game_client.channels.status_tx.send(ActivityStatus::Connecting) {
+                debug!("Status channel closed (shutdown in progress): {}", e);
             }
 
             match connect_and_authenticate(
@@ -216,11 +220,15 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // We disconnected or failed to connect
-            let _ = game_client.channels.status_tx.send(ActivityStatus::Disconnected);
+            // We disconnected or failed to connect - notify Discord (may fail if shutting down)
+            if let Err(e) = game_client.channels.status_tx.send(ActivityStatus::Disconnected) {
+                debug!("Status channel closed: {}", e);
+            }
             // Send dashboard offline event
             use common::messages::DashboardEvent;
-            let _ = game_client.channels.dashboard_tx.send(DashboardEvent::SetOffline);
+            if let Err(e) = game_client.channels.dashboard_tx.send(DashboardEvent::SetOffline) {
+                debug!("Dashboard channel closed: {}", e);
+            }
 
             // Calculate backoff
             if let Some(delay) = reconnect_state.next_delay() {
@@ -260,7 +268,10 @@ async fn main() -> Result<()> {
 
     // Handle graceful shutdown
     if shutdown {
-        let _ = shutdown_tx.send(true);
+        // Signal game client to logout (fire-and-forget - if channel closed, client is already gone)
+        if let Err(e) = shutdown_tx.send(true) {
+            debug!("Shutdown channel closed (game client already exited): {}", e);
+        }
         let timeout = tokio::time::Duration::from_secs(5);
         match tokio::time::timeout(timeout, game_task).await {
             Ok(Ok(())) => info!("Game client logged out gracefully"),

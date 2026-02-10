@@ -68,6 +68,8 @@ pub struct BridgeHandler {
     shutdown_rx: watch::Receiver<bool>,
     /// Resolved state (available after guild_create, for message() handler).
     resolved_state: std::sync::Mutex<Option<Arc<ResolvedBridgeState>>>,
+    /// Signal sent to main after guild_create() completes initialization.
+    init_complete_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl BridgeHandler {
@@ -82,6 +84,7 @@ impl BridgeHandler {
         command_tx: mpsc::UnboundedSender<WowCommand>,
         dashboard_config: GuildDashboardConfig,
         shutdown_rx: watch::Receiver<bool>,
+        init_complete_tx: oneshot::Sender<()>,
     ) -> Self {
         let (ready_tx, ready_rx) = oneshot::channel();
 
@@ -95,6 +98,7 @@ impl BridgeHandler {
             dashboard_config,
             shutdown_rx,
             resolved_state: std::sync::Mutex::new(None),
+            init_complete_tx: std::sync::Mutex::new(Some(init_complete_tx)),
         }
     }
 
@@ -544,5 +548,14 @@ impl EventHandler for BridgeHandler {
         self.spawn_background_tasks(&ctx, &resolved, channels);
 
         info!("Bridge initialization complete - all systems operational");
+
+        // Signal main that initialization is done
+        let tx = {
+            let mut guard = self.init_complete_tx.lock().unwrap();
+            guard.take()
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send(());
+        }
     }
 }

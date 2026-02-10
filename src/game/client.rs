@@ -1,32 +1,39 @@
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 use tracing::{debug, info, warn};
 
-use crate::common::{ActivityStatus, BridgeChannels, BridgeCommand, BridgeMessage, CommandResponseData};
+use crate::common::messages::{DashboardEvent, GuildDashboardData};
+use crate::common::{ActivityStatus, BridgeCommand, BridgeMessage, CommandResponseData, GameChannels};
 use crate::config::types::Config;
 use crate::discord::commands::CommandResponse;
 
-use crate::protocol::game::{new_game_connection, GameHandler, ChatProcessingResult};
-use crate::protocol::packets::opcodes::{
-    SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_CHANNEL_NOTIFY, SMSG_CHAR_ENUM, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_GM_MESSAGECHAT,
-    SMSG_GUILD_EVENT, SMSG_GUILD_QUERY, SMSG_GUILD_ROSTER, SMSG_INIT_WORLD_STATES, SMSG_LOGIN_VERIFY_WORLD, SMSG_LOGOUT_COMPLETE,
-    SMSG_MESSAGECHAT, SMSG_MOTD, SMSG_NAME_QUERY, SMSG_NOTIFICATION, SMSG_PONG, SMSG_SERVER_MESSAGE, SMSG_UPDATE_OBJECT,
-};
+use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, InitWorldStates, LoginVerifyWorld, Pong};
+use crate::protocol::game::{new_game_connection, ChatProcessingResult, GameConnection, GameHandler};
+use crate::protocol::packets::opcodes::*;
 use crate::protocol::packets::PacketDecode;
 use crate::protocol::realm::connector::RealmSession;
-use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, InitWorldStates, LoginVerifyWorld, Pong};
+
+/// Actions that packet handlers can request from the connection loop.
+#[derive(Debug)]
+enum HandlePacketResult {
+    /// No action needed.
+    None,
+    /// Graceful logout complete.
+    LoggedOut,
+}
 
 pub struct GameClient {
     config: Config,
-    pub channels: BridgeChannels,
+    pub channels: GameChannels,
     custom_channels: Vec<String>,
 }
 
 impl GameClient {
-    pub fn new(config: Config, channels: BridgeChannels, custom_channels: Vec<String>) -> Self {
+    pub fn new(config: Config, channels: GameChannels, custom_channels: Vec<String>) -> Self {
         Self {
             config,
             channels,
@@ -60,6 +67,7 @@ impl GameClient {
             &self.config.wow.character,
         );
         let mut shutdown_rx = self.channels.shutdown_rx.clone();
+
         // Ping interval (30s)
         let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
         ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -71,258 +79,18 @@ impl GameClient {
                 packet = connection.next() => {
                     match packet {
                         Some(Ok(packet)) => {
-                            let mut payload = packet.payload;
-                            match packet.opcode {
-                                SMSG_AUTH_CHALLENGE => {
-                                    let challenge = AuthChallenge::decode(&mut payload)?;
-                                    let auth_session = handler.handle_auth_challenge(challenge)?;
-                                    connection.send(auth_session.into()).await?;
-                                    info!("Sent auth session");
-                                    // Initialize header crypt with session key after sending AUTH_SESSION
-                                    connection.codec_mut().init_crypt(&session.session_key);
-                                }
-                                SMSG_AUTH_RESPONSE => {
-                                    let response = AuthResponse::decode(&mut payload)?;
-                                    if handler.handle_auth_response(response)? {
-                                        info!("Auth successful, requesting character list");
-                                        // Send CMSG_CHAR_ENUM to request character list
-                                        let char_enum_req = handler.build_char_enum_request();
-                                        connection.send(char_enum_req.into()).await?;
-                                    } else {
-                                        return Err(anyhow!("Game auth failed"));
-                                    }
-                                }
-                                SMSG_CHAR_ENUM => {
-                                    let char_enum = CharEnum::decode(&mut payload)?;
-                                    if let Some(char_info) = handler.handle_char_enum(char_enum, &self.config.wow.character) {
-                                        let login = handler.build_player_login(char_info.guid);
-                                        connection.send(login.into()).await?;
-                                        info!("Sent player login for {}", char_info.name);
-                                    } else {
-                                        return Err(anyhow!("Character '{}' not found", self.config.wow.character));
-                                    }
-                                }
-                                SMSG_LOGIN_VERIFY_WORLD => {
-                                    let verify = LoginVerifyWorld::decode(&mut payload)?;
-                                    handler.handle_login_verify_world(verify)?;
-                                    info!("In world! Starting ping loop and requesting guild info");
-                                    
-                                    // Send realm status update
-                                    if let Err(e) = self.channels.status_tx.send(ActivityStatus::ConnectedToRealm(self.config.wow.realm.clone())) {
-                                        warn!("Failed to send realm status: {}", e);
-                                    }
+                            let action = self.handle_packet(
+                                &mut handler,
+                                &mut connection,
+                                packet.opcode,
+                                packet.payload,
+                                &session.session_key,
+                            ).await?;
 
-                                    // Request guild info if in a guild
-                                    if handler.guild_id > 0 {
-                                        let guild_query = handler.build_guild_query(handler.guild_id);
-                                        connection.send(guild_query.into()).await?;
-                                        
-                                        let roster_req = handler.request_guild_roster();
-                                        connection.send(roster_req.into()).await?;
-                                    }
-                                    
-                                    // Join custom channels
-                                    for channel_name in &self.custom_channels {
-                                        let join = handler.build_join_channel(channel_name);
-                                        connection.send(join.into()).await?;
-                                        info!("Joining channel: {}", channel_name);
-                                    }
-                                }
-                                SMSG_MESSAGECHAT => {
-                                    match handler.handle_messagechat(payload)? {
-                                        Some(ChatProcessingResult::Chat(chat_msg)) => {
-                                            // Regular chat message - convert to bridge message
-                                            let wow_msg = BridgeMessage::from(chat_msg);
-
-                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                                warn!("Failed to send message to bridge: {}", e);
-                                            }
-                                        }
-                                        Some(ChatProcessingResult::GuildEvent(event_data)) => {
-                                            // Send as a guild event BridgeMessage
-                                            let wow_msg = BridgeMessage::guild_event(event_data, String::new());
-
-                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                                warn!("Failed to send message to bridge: {}", e);
-                                            }
-                                        }
-                                        None => {
-                                            // Name query needed - check if we have pending messages
-                                            if !handler.pending_messages.is_empty() {
-                                                // Send name queries for all unknown GUIDs
-                                                for guid in handler.pending_messages.keys() {
-                                                    let name_query = handler.build_name_query(*guid);
-                                                    connection.send(name_query.into()).await?;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                SMSG_NAME_QUERY => {
-                                    let resolved = handler.handle_name_query(payload)?;
-                                    for chat_msg in resolved {
-                                        // Convert to bridge message
-                                        let wow_msg = BridgeMessage::from(chat_msg);
-
-                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                            warn!("Failed to send message to bridge: {}", e);
-                                        }
-                                    }
-                                }
-                                SMSG_CHANNEL_NOTIFY => {
-                                    handler.handle_channel_notify(payload)?;
-                                }
-                                SMSG_GUILD_QUERY => {
-                                    handler.handle_guild_query(payload)?;
-                                }
-                                SMSG_GUILD_ROSTER => {
-                                    handler.handle_guild_roster(payload)?;
-                                    info!("Guild roster loaded: {} members", handler.guild_roster.len());
-
-                                    // Send guild stats update
-                                    let online_count = handler.get_online_guildies_count();
-                                    if let Err(e) = self.channels.status_tx.send(ActivityStatus::GuildStats { online_count }) {
-                                        warn!("Failed to send guild stats status: {}", e);
-                                    }
-
-                                    // Send guild dashboard update
-                                    if let Some(guild_info) = &handler.guild_info {
-                                        use crate::common::messages::{DashboardEvent, GuildDashboardData};
-                                        let dashboard_data = GuildDashboardData {
-                                            guild_name: guild_info.name.clone(),
-                                            realm: self.config.wow.realm.clone(),
-                                            members: handler.get_online_guildies(),
-                                            online: true,
-                                        };
-
-                                        if let Err(e) = self.channels.dashboard_tx.send(DashboardEvent::Update(dashboard_data)) {
-                                            warn!("Failed to send guild dashboard update: {}", e);
-                                        }
-                                    }
-                                }
-                                SMSG_GUILD_EVENT => {
-                                    if let Some(event_data) = handler.handle_guild_event(payload)? {
-                                        // For MOTD events, the target_name contains the MOTD text
-                                        // which should go in the content field for %message placeholder
-                                        let content = if event_data.event_name == "motd" {
-                                            event_data.target_name.clone().unwrap_or_default()
-                                        } else {
-                                            String::new()
-                                        };
-
-                                        info!(
-                                            guild_event = %event_data.event_name,
-                                            player = %event_data.player_name,
-                                            target = ?event_data.target_name,
-                                            rank = ?event_data.rank_name,
-                                            content = %content,
-                                            "Guild event received"
-                                        );
-
-                                        // Check if we need to update roster before moving event_data
-                                        let should_update_roster = ["online", "offline", "joined", "left", "removed"]
-                                            .contains(&event_data.event_name.as_str());
-                                        let event_name = event_data.event_name.clone();
-
-                                        // Send guild event as a BridgeMessage to Discord
-                                        let wow_msg = BridgeMessage::guild_event(event_data, content);
-                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                            warn!("Failed to send guild event to bridge: {}", e);
-                                        }
-
-                                        // Update roster on online/offline/join/left events
-                                        if should_update_roster {
-                                            let roster_req = handler.request_guild_roster();
-                                            if let Err(e) = connection.send(roster_req.into()).await {
-                                                warn!("Failed to send guild roster request after event: {}", e);
-                                            } else {
-                                                debug!("Requested guild roster update after {} event", event_name);
-                                            }
-                                        }
-                                    }
-                                }
-                                SMSG_NOTIFICATION => {
-                                    if let Ok(msg) = handler.handle_notification(payload) {
-                                        // Send notification as system message to Discord
-                                        let wow_msg = BridgeMessage::system(msg);
-                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                            warn!("Failed to send notification to bridge: {}", e);
-                                        }
-                                    }
-                                }
-                                SMSG_MOTD => {
-                                    if self.config.server_motd_enabled() {
-                                        if let Ok(Some(msg)) = handler.handle_motd(payload) {
-                                            // Send MOTD as system message to Discord
-                                            let wow_msg = BridgeMessage::system(msg);
-                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                                warn!("Failed to send MOTD to bridge: {}", e);
-                                            }
-                                        }
-                                    }
-                                }
-                                SMSG_GM_MESSAGECHAT => {
-                                    match handler.handle_gm_messagechat(payload)? {
-                                        Some(chat_msg) => {
-                                            // Convert to bridge message
-                                            let wow_msg = BridgeMessage::from(chat_msg);
-
-                                            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                                warn!("Failed to send GM message to bridge: {}", e);
-                                            }
-                                        }
-                                        None => {
-                                            // Name query needed - check if we have pending messages
-                                            if !handler.pending_messages.is_empty() {
-                                                // Send name queries for all unknown GUIDs
-                                                for guid in handler.pending_messages.keys() {
-                                                    let name_query = handler.build_name_query(*guid);
-                                                    connection.send(name_query.into()).await?;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                SMSG_SERVER_MESSAGE => {
-                                    if let Ok(msg) = handler.handle_server_message(payload) {
-                                        // Send server message as system message to Discord
-                                        let wow_msg = BridgeMessage::system(msg);
-                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                            warn!("Failed to send server message to bridge: {}", e);
-                                        }
-                                    }
-                                }
-                                SMSG_CHAT_PLAYER_NOT_FOUND => {
-                                    if let Ok(Some(chat_msg)) = handler.handle_chat_player_not_found(payload) {
-                                        // Send "player not found" as WHISPER_INFORM to Discord
-                                        let wow_msg = BridgeMessage::from(chat_msg);
-                                        if let Err(e) = self.channels.wow_tx.send(wow_msg) {
-                                            warn!("Failed to send player not found message to bridge: {}", e);
-                                        }
-                                    }
-                                }
-                                SMSG_PONG => {
-                                     let pong = Pong::decode(&mut payload)?;
-                                     handler.handle_pong(pong);
-                                }
-                                SMSG_LOGOUT_COMPLETE => {
-                                    info!("Logout complete - character logged out gracefully");
+                            match action {
+                                HandlePacketResult::None => {}
+                                HandlePacketResult::LoggedOut => {
                                     return Ok(());
-                                }
-                                SMSG_INIT_WORLD_STATES => {
-                                    let _ = InitWorldStates::decode(&mut payload)?;
-                                    handler.handle_init_world_states();
-                                }
-                                SMSG_UPDATE_OBJECT => {
-                                    // SMSG_UPDATE_OBJECT is handled manually with payload bytes
-                                    if let Ok(Some(guid)) = handler.handle_update_object(payload, self.config.quirks.sit) {
-                                        info!("Found a chair! Sitting on it...");
-                                        let interact = handler.build_gameobj_use(guid);
-                                        connection.send(interact.into()).await?;
-                                    }
-                                }
-                                _ => {
-                                    // Ignore unknown packets
                                 }
                             }
                         }
@@ -330,96 +98,551 @@ impl GameClient {
                         None => return Ok(()), // Connection closed
                     }
                 }
+
                 // Shutdown signal received - initiate graceful logout
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
-                        if handler.in_world {
-                            info!("Shutdown signal received - logging out character...");
-                            let logout_req = handler.build_logout_request();
-                            if let Err(e) = connection.send(logout_req.into()).await {
-                                warn!("Failed to send logout request: {}", e);
-                            }
-                            // Wait briefly for logout complete or timeout
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            info!("Logout timeout or complete - closing connection");
-                        }
+                        self.handle_shutdown(&mut handler, &mut connection).await?;
                         return Ok(());
                     }
                 }
+
                 // Ping keepalive every 30 seconds
                 _ = ping_interval.tick() => {
-                    if handler.in_world {
-                        let ping = handler.build_ping(0); // sequence doesn't matter for keepalive
-                        if let Err(e) = connection.send(ping.into()).await {
-                            return Err(anyhow!("Failed to send ping: {}", e));
-                        }
-
-                        // Periodic guild roster update (every ~60 seconds)
-                        if handler.should_update_guild_roster() {
-                            let roster_req = handler.request_guild_roster();
-                            if let Err(e) = connection.send(roster_req.into()).await {
-                                warn!("Failed to send guild roster request: {}", e);
-                            } else {
-                                debug!("Requested guild roster update");
-                            }
-                        }
-                    }
+                    self.handle_ping_tick(&mut handler, &mut connection).await?;
                 }
+
                 // Outgoing messages from bridge (Discord -> WoW)
                 Some(outgoing) = self.channels.outgoing_wow_rx.recv() => {
-                    if handler.in_world {
-                        let chat_msg = handler.build_chat_message(
-                            outgoing.chat_type,
-                            &outgoing.content,
-                            outgoing.channel_name.as_deref(),
-                        );
-                        if let Err(e) = connection.send(chat_msg.into()).await {
-                            warn!("Failed to send chat message to WoW: {}", e);
-                        }
-                    }
+                    self.handle_outgoing_message(&mut handler, &mut connection, outgoing).await?;
                 }
+
                 // Commands from Discord (!who, !gmotd)
                 Some(command) = self.channels.command_rx.recv() => {
-                    match command {
-                        BridgeCommand::Who { args, reply_channel } => {
-                            let content = if let Some(search_name) = args {
-                                let member = handler.search_guild_member(&search_name);
-                                let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
-                                CommandResponseData::WhoSearch(search_name, member, guild_name)
-                            } else {
-                                let members = handler.get_online_guildies();
-                                let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
-                                CommandResponseData::WhoList(members, guild_name)
-                            };
+                    self.handle_command(&mut handler, command);
+                }
+            }
+        }
+    }
 
-                            info!("Processed !who command for channel {}", reply_channel);
+    /// Handle incoming packet dispatch.
+    async fn handle_packet<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        opcode: u16,
+        payload: Bytes,
+        session_key: &[u8; 40],
+    ) -> Result<HandlePacketResult>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let mut payload = payload;
 
-                            // Send response back to Discord
-                            let cmd_response = CommandResponse {
-                                channel_id: reply_channel,
-                                content,
-                            };
-                            if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
-                                warn!("Failed to send !who response to bridge: {}", e);
-                            }
-                        }
-                        BridgeCommand::Gmotd { reply_channel } => {
-                            let motd = handler.get_guild_motd().map(|s| s.to_string());
-                            let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
-                            let content = CommandResponseData::GuildMotd(motd, guild_name);
+        match opcode {
+            SMSG_AUTH_CHALLENGE => {
+                self.on_auth_challenge(handler, connection, &mut payload, session_key).await?;
+            }
+            SMSG_AUTH_RESPONSE => {
+                if !self.on_auth_response(handler, connection, &mut payload).await? {
+                    return Err(anyhow!("Game auth failed"));
+                }
+            }
+            SMSG_CHAR_ENUM => {
+                self.on_char_enum(handler, connection, &mut payload).await?;
+            }
+            SMSG_LOGIN_VERIFY_WORLD => {
+                self.on_login_verify_world(handler, connection, &mut payload).await?;
+            }
+            SMSG_MESSAGECHAT => {
+                self.on_messagechat(handler, connection, payload).await?;
+            }
+            SMSG_GM_MESSAGECHAT => {
+                self.on_gm_messagechat(handler, connection, payload).await?;
+            }
+            SMSG_NAME_QUERY => {
+                self.on_name_query(handler, payload)?;
+            }
+            SMSG_CHANNEL_NOTIFY => {
+                handler.handle_channel_notify(payload)?;
+            }
+            SMSG_GUILD_QUERY => {
+                handler.handle_guild_query(payload)?;
+            }
+            SMSG_GUILD_ROSTER => {
+                self.on_guild_roster(handler, payload)?;
+            }
+            SMSG_GUILD_EVENT => {
+                self.on_guild_event(handler, connection, payload).await?;
+            }
+            SMSG_NOTIFICATION => {
+                self.on_notification(handler, payload);
+            }
+            SMSG_MOTD => {
+                self.on_motd(handler, payload);
+            }
+            SMSG_SERVER_MESSAGE => {
+                self.on_server_message(handler, payload);
+            }
+            SMSG_CHAT_PLAYER_NOT_FOUND => {
+                self.on_chat_player_not_found(handler, payload);
+            }
+            SMSG_PONG => {
+                let pong = Pong::decode(&mut payload)?;
+                handler.handle_pong(pong);
+            }
+            SMSG_LOGOUT_COMPLETE => {
+                info!("Logout complete - character logged out gracefully");
+                return Ok(HandlePacketResult::LoggedOut);
+            }
+            SMSG_INIT_WORLD_STATES => {
+                let _ = InitWorldStates::decode(&mut payload)?;
+                handler.handle_init_world_states();
+            }
+            SMSG_UPDATE_OBJECT => {
+                self.on_update_object(handler, connection, payload).await?;
+            }
+            _ => {
+                // Ignore unknown packets
+            }
+        }
 
-                            info!("Processed !gmotd command for channel {}", reply_channel);
+        Ok(HandlePacketResult::None)
+    }
 
-                            // Send response back to Discord
-                            let cmd_response = CommandResponse {
-                                channel_id: reply_channel,
-                                content,
-                            };
-                            if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
-                                warn!("Failed to send !gmotd response to bridge: {}", e);
-                            }
-                        }
-                    }
+    // ========================================================================
+    // Authentication handlers
+    // ========================================================================
+
+    async fn on_auth_challenge<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: &mut Bytes,
+        session_key: &[u8; 40],
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let challenge = AuthChallenge::decode(payload)?;
+        let auth_session = handler.handle_auth_challenge(challenge)?;
+        connection.send(auth_session.into()).await?;
+        info!("Sent auth session");
+        // Initialize header crypt with session key after sending AUTH_SESSION
+        connection.codec_mut().init_crypt(session_key);
+        Ok(())
+    }
+
+    async fn on_auth_response<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: &mut Bytes,
+    ) -> Result<bool>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let response = AuthResponse::decode(payload)?;
+        if handler.handle_auth_response(response)? {
+            info!("Auth successful, requesting character list");
+            // Send CMSG_CHAR_ENUM to request character list
+            let char_enum_req = handler.build_char_enum_request();
+            connection.send(char_enum_req.into()).await?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn on_char_enum<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: &mut Bytes,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let char_enum = CharEnum::decode(payload)?;
+        if let Some(char_info) = handler.handle_char_enum(char_enum, &self.config.wow.character) {
+            let login = handler.build_player_login(char_info.guid);
+            connection.send(login.into()).await?;
+            info!("Sent player login for {}", char_info.name);
+            Ok(())
+        } else {
+            Err(anyhow!("Character '{}' not found", self.config.wow.character))
+        }
+    }
+
+    async fn on_login_verify_world<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: &mut Bytes,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let verify = LoginVerifyWorld::decode(payload)?;
+        handler.handle_login_verify_world(verify)?;
+        info!("In world! Starting ping loop and requesting guild info");
+
+        // Send realm status update
+        if let Err(e) = self.channels.status_tx.send(ActivityStatus::ConnectedToRealm(self.config.wow.realm.clone())) {
+            warn!("Failed to send realm status: {}", e);
+        }
+
+        // Request guild info if in a guild
+        if handler.guild_id > 0 {
+            let guild_query = handler.build_guild_query(handler.guild_id);
+            connection.send(guild_query.into()).await?;
+
+            let roster_req = handler.request_guild_roster();
+            connection.send(roster_req.into()).await?;
+        }
+
+        // Join custom channels
+        for channel_name in &self.custom_channels {
+            let join = handler.build_join_channel(channel_name);
+            connection.send(join.into()).await?;
+            info!("Joining channel: {}", channel_name);
+        }
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Chat message handlers
+    // ========================================================================
+
+    async fn on_messagechat<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: Bytes,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        match handler.handle_messagechat(payload)? {
+            Some(ChatProcessingResult::Chat(chat_msg)) => {
+                let wow_msg = BridgeMessage::from(chat_msg);
+                if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                    warn!("Failed to send message to bridge: {}", e);
+                }
+            }
+            Some(ChatProcessingResult::GuildEvent(event_data)) => {
+                let wow_msg = BridgeMessage::guild_event(event_data, String::new());
+                if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                    warn!("Failed to send message to bridge: {}", e);
+                }
+            }
+            None => {
+                // Name query needed - send queries for all unknown GUIDs
+                for guid in handler.pending_messages.keys() {
+                    let name_query = handler.build_name_query(*guid);
+                    connection.send(name_query.into()).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_gm_messagechat<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: Bytes,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        match handler.handle_gm_messagechat(payload)? {
+            Some(chat_msg) => {
+                let wow_msg = BridgeMessage::from(chat_msg);
+                if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                    warn!("Failed to send GM message to bridge: {}", e);
+                }
+            }
+            None => {
+                // Name query needed - send queries for all unknown GUIDs
+                for guid in handler.pending_messages.keys() {
+                    let name_query = handler.build_name_query(*guid);
+                    connection.send(name_query.into()).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn on_name_query(&self, handler: &mut GameHandler, payload: Bytes) -> Result<()> {
+        let resolved = handler.handle_name_query(payload)?;
+        for chat_msg in resolved {
+            let wow_msg = BridgeMessage::from(chat_msg);
+            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                warn!("Failed to send message to bridge: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    // ========================================================================
+    // Guild handlers
+    // ========================================================================
+
+    fn on_guild_roster(&self, handler: &mut GameHandler, payload: Bytes) -> Result<()> {
+        handler.handle_guild_roster(payload)?;
+        info!("Guild roster loaded: {} members", handler.guild_roster.len());
+
+        // Send guild stats update
+        let online_count = handler.get_online_guildies_count();
+        if let Err(e) = self.channels.status_tx.send(ActivityStatus::GuildStats { online_count }) {
+            warn!("Failed to send guild stats status: {}", e);
+        }
+
+        // Send guild dashboard update
+        if let Some(guild_info) = &handler.guild_info {
+            let dashboard_data = GuildDashboardData {
+                guild_name: guild_info.name.clone(),
+                realm: self.config.wow.realm.clone(),
+                members: handler.get_online_guildies(),
+                online: true,
+            };
+
+            if let Err(e) = self.channels.dashboard_tx.send(DashboardEvent::Update(dashboard_data)) {
+                warn!("Failed to send guild dashboard update: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_guild_event<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: Bytes,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if let Some(event_data) = handler.handle_guild_event(payload)? {
+            // For MOTD events, the target_name contains the MOTD text
+            // which should go in the content field for %message placeholder
+            let content = if event_data.event_name == "motd" {
+                event_data.target_name.clone().unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            info!(
+                guild_event = %event_data.event_name,
+                player = %event_data.player_name,
+                target = ?event_data.target_name,
+                rank = ?event_data.rank_name,
+                content = %content,
+                "Guild event received"
+            );
+
+            // Check if we need to update roster before moving event_data
+            let should_update_roster = ["online", "offline", "joined", "left", "removed"]
+                .contains(&event_data.event_name.as_str());
+            let event_name = event_data.event_name.clone();
+
+            // Send guild event as a BridgeMessage to Discord
+            let wow_msg = BridgeMessage::guild_event(event_data, content);
+            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                warn!("Failed to send guild event to bridge: {}", e);
+            }
+
+            // Update roster on online/offline/join/left events
+            if should_update_roster {
+                let roster_req = handler.request_guild_roster();
+                if let Err(e) = connection.send(roster_req.into()).await {
+                    warn!("Failed to send guild roster request: {}", e);
+                } else {
+                    debug!("Requested guild roster update after {} event", event_name);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // ========================================================================
+    // System message handlers
+    // ========================================================================
+
+    fn on_notification(&self, handler: &mut GameHandler, payload: Bytes) {
+        if let Ok(msg) = handler.handle_notification(payload) {
+            let wow_msg = BridgeMessage::system(msg);
+            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                warn!("Failed to send notification to bridge: {}", e);
+            }
+        }
+    }
+
+    fn on_motd(&self, handler: &mut GameHandler, payload: Bytes) {
+        if self.config.server_motd_enabled() {
+            if let Ok(Some(msg)) = handler.handle_motd(payload) {
+                let wow_msg = BridgeMessage::system(msg);
+                if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                    warn!("Failed to send MOTD to bridge: {}", e);
+                }
+            }
+        }
+    }
+
+    fn on_server_message(&self, handler: &mut GameHandler, payload: Bytes) {
+        if let Ok(msg) = handler.handle_server_message(payload) {
+            let wow_msg = BridgeMessage::system(msg);
+            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                warn!("Failed to send server message to bridge: {}", e);
+            }
+        }
+    }
+
+    fn on_chat_player_not_found(&self, handler: &mut GameHandler, payload: Bytes) {
+        if let Ok(Some(chat_msg)) = handler.handle_chat_player_not_found(payload) {
+            // Send "player not found" as WHISPER_INFORM to Discord
+            let wow_msg = BridgeMessage::from(chat_msg);
+            if let Err(e) = self.channels.wow_tx.send(wow_msg) {
+                warn!("Failed to send player not found message to bridge: {}", e);
+            }
+        }
+    }
+
+    // ========================================================================
+    // World handlers
+    // ========================================================================
+
+    async fn on_update_object<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        payload: Bytes,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if let Ok(Some(guid)) = handler.handle_update_object(payload, self.config.quirks.sit) {
+            info!("Found a chair! Sitting on it...");
+            let interact = handler.build_gameobj_use(guid);
+            connection.send(interact.into()).await?;
+        }
+        Ok(())
+    }
+
+    // ========================================================================
+    // Non-packet event handlers
+    // ========================================================================
+
+    async fn handle_shutdown<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if handler.in_world {
+            info!("Shutdown signal received - logging out character...");
+            let logout_req = handler.build_logout_request();
+            if let Err(e) = connection.send(logout_req.into()).await {
+                warn!("Failed to send logout request: {}", e);
+            }
+            // Wait briefly for logout complete or timeout
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            info!("Logout timeout or complete - closing connection");
+        }
+        Ok(())
+    }
+
+    async fn handle_ping_tick<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if handler.in_world {
+            let ping = handler.build_ping(0); // sequence doesn't matter for keepalive
+            if let Err(e) = connection.send(ping.into()).await {
+                return Err(anyhow!("Failed to send ping: {}", e));
+            }
+
+            // Periodic guild roster update (every ~60 seconds)
+            if handler.should_update_guild_roster() {
+                let roster_req = handler.request_guild_roster();
+                if let Err(e) = connection.send(roster_req.into()).await {
+                    warn!("Failed to send guild roster request: {}", e);
+                } else {
+                    debug!("Requested guild roster update");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_outgoing_message<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+        outgoing: BridgeMessage,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if handler.in_world {
+            let chat_msg = handler.build_chat_message(
+                outgoing.chat_type,
+                &outgoing.content,
+                outgoing.channel_name.as_deref(),
+            );
+            if let Err(e) = connection.send(chat_msg.into()).await {
+                warn!("Failed to send chat message to WoW: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_command(&self, handler: &mut GameHandler, command: BridgeCommand) {
+        match command {
+            BridgeCommand::Who { args, reply_channel } => {
+                let content = if let Some(search_name) = args {
+                    let member = handler.search_guild_member(&search_name);
+                    let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
+                    CommandResponseData::WhoSearch(search_name, member, guild_name)
+                } else {
+                    let members = handler.get_online_guildies();
+                    let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
+                    CommandResponseData::WhoList(members, guild_name)
+                };
+
+                info!("Processed !who command for channel {}", reply_channel);
+
+                // Send response back to Discord
+                let cmd_response = CommandResponse {
+                    channel_id: reply_channel,
+                    content,
+                };
+                if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
+                    warn!("Failed to send !who response to bridge: {}", e);
+                }
+            }
+            BridgeCommand::Gmotd { reply_channel } => {
+                let motd = handler.get_guild_motd().map(|s| s.to_string());
+                let guild_name = handler.guild_info.as_ref().map(|g| g.name.clone());
+                let content = CommandResponseData::GuildMotd(motd, guild_name);
+
+                info!("Processed !gmotd command for channel {}", reply_channel);
+
+                // Send response back to Discord
+                let cmd_response = CommandResponse {
+                    channel_id: reply_channel,
+                    content,
+                };
+                if let Err(e) = self.channels.command_response_tx.send(cmd_response) {
+                    warn!("Failed to send !gmotd response to bridge: {}", e);
                 }
             }
         }
@@ -481,10 +704,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth_flow() {
+        use crate::bridge::ChannelBundle;
+
         let config = make_test_config();
         let session = make_test_session();
-        let (channels, _wow_rx, _cmd_tx, _cmd_resp_rx, _shutdown_tx, _status_tx, _dashboard_rx) = BridgeChannels::new();
-        let mut client = GameClient::new(config, channels, Vec::new());
+        let channels = ChannelBundle::new();
+        let mut client = GameClient::new(config, channels.game, Vec::new());
 
         let (client_stream, mut server_stream) = tokio::io::duplex(4096);
 

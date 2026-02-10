@@ -7,5 +7,5 @@ pub mod handler;
 pub mod header;
 pub mod packets;
 
-pub use connector::new_game_connection;
+pub use connector::{new_game_connection, GameConnection};
 pub use handler::{ChatProcessingResult, GameHandler};

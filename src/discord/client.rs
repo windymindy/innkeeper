@@ -9,7 +9,7 @@ use std::time::Duration;
 use serenity::all::Http;
 use serenity::model::gateway::GatewayIntents;
 use serenity::Client;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -64,7 +64,7 @@ impl DiscordBotBuilder {
     }
 
     /// Build the Discord bot.
-    pub async fn build(self) -> anyhow::Result<DiscordBot> {
+    pub async fn build(self, init_complete_tx: oneshot::Sender<()>) -> anyhow::Result<DiscordBot> {
         // Build pending channel configs from config
         let mut pending_configs: Vec<(String, String, ChannelConfig)> = Vec::new();
 
@@ -137,6 +137,7 @@ impl DiscordBotBuilder {
             self.channels.command_tx.clone(),
             self.config.guild_dashboard.clone(),
             self.channels.shutdown_rx,
+            init_complete_tx,
         );
 
         // Build client
@@ -178,29 +179,11 @@ impl DiscordBot {
     }
 
     /// Run the Discord bot with automatic reconnection.
-    pub async fn run(self) {
-        self.run_internal(None).await;
-    }
-
-    /// Run the Discord bot and signal when ready.
-    pub async fn run_with_ready_signal(self, ready_tx: tokio::sync::oneshot::Sender<()>) {
-        self.run_internal(Some(ready_tx)).await;
-    }
-
-    async fn run_internal(mut self, ready_tx: Option<tokio::sync::oneshot::Sender<()>>) {
+    pub async fn run(mut self) {
         let mut retry_count = 0u32;
         let max_retries = 10;
         let base_delay = Duration::from_secs(5);
         let max_delay = Duration::from_secs(300);
-
-        // Signal ready after a short delay (we can't wait for guild_create in the first run)
-        if let Some(tx) = ready_tx {
-            tokio::spawn(async move {
-                // Give Discord time to connect and resolve channels
-                sleep(Duration::from_secs(5)).await;
-                let _ = tx.send(());
-            });
-        }
 
         loop {
             info!("Connecting to Discord... (attempt {})", retry_count + 1);
@@ -243,6 +226,9 @@ impl DiscordBot {
                         dashboard_rx: dummy_dashboard_rx,
                     };
 
+                    // Create a dummy init signal for reconnection (already fired on first connect)
+                    let (dummy_init_tx, _) = oneshot::channel();
+
                     let handler = BridgeHandler::new(
                         self.bridge.clone(),
                         pending_state,
@@ -250,6 +236,7 @@ impl DiscordBot {
                         self.command_tx.clone(),
                         self.dashboard_config.clone(),
                         dummy_shutdown_rx,
+                        dummy_init_tx,
                     );
 
                     match Client::builder(&self.token, self.intents)

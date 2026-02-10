@@ -16,7 +16,7 @@ pub mod orchestrator;
 pub mod state;
 
 // Re-export main types for convenience
-pub use channels::BridgeChannels;
+pub use channels::{ChannelBundle, GameChannels};
 pub use orchestrator::Bridge;
 pub use state::{
     ChannelConfig, CommandResponseContext, DashboardContext, DiscordToWowContext,
