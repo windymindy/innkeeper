@@ -172,7 +172,7 @@ impl RealmHandler {
         // Split into ciphertext and tag
         let password_len = password_bytes.len();
         let password_ciphertext = &encrypted_password[..password_len];
-        let password_tag: [u8; 16] = encrypted_password[password_len..].try_into().unwrap();
+        let password_tag: [u8; 16] = encrypted_password[password_len..].try_into()?;
 
         // Build inner payload (data_1)
         let mut data_1 = BytesMut::with_capacity(605 + password_len);
@@ -261,7 +261,7 @@ impl RealmHandler {
 
         // Split encrypted data and tag
         let encrypted_data = &encrypted[..encrypted.len() - 16];
-        let outer_tag: [u8; 16] = encrypted[encrypted.len() - 16..].try_into().unwrap();
+        let outer_tag: [u8; 16] = encrypted[encrypted.len() - 16..].try_into()?;
 
         // XOR encrypted data with mask
         let xored_data: Vec<u8> = encrypted_data.iter().map(|b| b ^ XOR_MASK).collect();
@@ -355,7 +355,7 @@ impl RealmHandler {
 
         // Verify server proof
         if data.len() >= 34 {
-            let server_proof: [u8; 32] = data[2..34].try_into().unwrap();
+            let server_proof: [u8; 32] = data[2..34].try_into()?;
             if server_proof != self.proof_2 {
                 return Err(anyhow!("Server proof mismatch"));
             }

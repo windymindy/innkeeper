@@ -6,13 +6,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use backon::BackoffBuilder;
-use serenity::all::Http;
-use serenity::model::gateway::GatewayIntents;
+use serenity::prelude::*;
+use serenity::async_trait;
 use serenity::Client;
+use serenity::model::gateway::Ready;
+use serenity::model::guild::Guild;
+
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+use backon::BackoffBuilder;
 
 use crate::bridge::{Bridge, ChannelConfig, PendingBridgeState};
 use crate::bridge::orchestrator::parse_channel_config;
@@ -21,6 +24,54 @@ use crate::common::messages::DashboardEvent;
 use crate::config::types::{Config, GuildDashboardConfig};
 use crate::discord::commands::{CommandResponse, WowCommand};
 use crate::discord::handler::{BridgeHandler, TaskChannels};
+
+#[derive(Debug, Clone)]
+pub enum DiscordBotEvent {
+    /// Bot connected and ready.
+    Ready(Ready),
+    /// Guild data received.
+    GuildCreate {
+        context: Context,
+        guild: Guild,
+    },
+    /// Message received.
+    Message {
+        context: Context,
+        message: serenity::model::channel::Message,
+    },
+    Disconnected
+}
+
+struct DiscordBotEvents {
+    discord_events_tx: mpsc::UnboundedSender<DiscordBotEvent>,
+}
+
+impl DiscordBotEvents {
+    fn new(discord_events_tx: mpsc::UnboundedSender<DiscordBotEvent>) -> Self {
+        Self { discord_events_tx }
+    }
+}
+
+#[async_trait]
+impl EventHandler for DiscordBotEvents {
+    async fn ready(&self, _context: Context, ready: Ready) {
+        if let Err(error) = self.discord_events_tx.send(DiscordBotEvent::Ready(ready)) {
+            warn!("Failed to process discord event: {}", error);
+        }
+    }
+
+    async fn guild_create(&self, context: Context, guild: Guild, _is_new: Option<bool>) {
+        if let Err(error) = self.discord_events_tx.send(DiscordBotEvent::GuildCreate { context, guild }) {
+            warn!("Failed to process discord event: {}", error);
+        }
+    }
+
+    async fn message(&self, context: Context, message: serenity::model::channel::Message) {
+        if let Err(error) = self.discord_events_tx.send(DiscordBotEvent::Message { context, message }) {
+            warn!("Failed to process discord event: {}", error);
+        }
+    }
+}
 
 /// Channels for Discord bot communication.
 pub struct DiscordChannels {
@@ -78,16 +129,6 @@ impl DiscordBotBuilder {
                 discord_channel_name: channel.discord.channel.clone(),
                 wow_chat_type,
                 wow_channel_name,
-                format_wow_to_discord: channel
-                    .discord
-                    .format
-                    .clone()
-                    .unwrap_or_else(|| "[%user]: %message".to_string()),
-                format_discord_to_wow: channel
-                    .wow
-                    .format
-                    .clone()
-                    .unwrap_or_else(|| "%user: %message".to_string()),
             };
 
             pending_configs.push((
@@ -123,64 +164,76 @@ impl DiscordBotBuilder {
             dashboard_rx: self.channels.dashboard_rx,
         };
 
-        // Build intents
-        let intents = GatewayIntents::GUILD_MESSAGES
-            | GatewayIntents::MESSAGE_CONTENT
-            | GatewayIntents::GUILDS
-            | GatewayIntents::GUILD_MEMBERS
-            | GatewayIntents::GUILD_PRESENCES;
+        let (discord_events_tx, discord_events_rx) = mpsc::unbounded_channel::<DiscordBotEvent>();
 
-        // Create handler
+        let client = build_client(&self.token, discord_events_tx.clone()).await?;
+
         let handler = BridgeHandler::new(
             self.bridge.clone(),
             pending_state,
-            task_channels,
             self.channels.command_tx.clone(),
             self.config.guild_dashboard.clone(),
-            self.channels.shutdown_rx,
             init_complete_tx,
         );
 
-        // Build client
-        let client = Client::builder(&self.token, intents)
-            .event_handler(handler)
-            .await?;
-
-        let http = client.http.clone();
-
         Ok(DiscordBot {
             client: Some(client),
-            http,
             token: self.token,
-            intents,
             dashboard_config: self.config.guild_dashboard,
             outgoing_wow_tx: self.channels.outgoing_wow_tx,
             command_tx: self.channels.command_tx,
             bridge: self.bridge,
+            handler,
+            discord_events_rx,
+            discord_events_tx,
+            task_channels,
+            shutdown_rx: self.channels.shutdown_rx,
         })
     }
 }
 
-/// Discord bot instance with reconnection support.
+async fn build_client(token: &String, discord_events_tx: mpsc::UnboundedSender<DiscordBotEvent>) -> anyhow::Result<Client> {
+    let intents = GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT
+        | GatewayIntents::GUILDS
+        | GatewayIntents::GUILD_MEMBERS
+        | GatewayIntents::GUILD_PRESENCES;
+    let events = DiscordBotEvents::new(discord_events_tx);
+    let client = Client::builder(token, intents)
+        .event_handler(events)
+        .await?;
+    Ok(client)
+}
+
 pub struct DiscordBot {
     client: Option<Client>,
-    http: Arc<Http>,
     token: String,
-    intents: GatewayIntents,
     dashboard_config: GuildDashboardConfig,
     outgoing_wow_tx: mpsc::UnboundedSender<BridgeMessage>,
     command_tx: mpsc::UnboundedSender<WowCommand>,
     bridge: Arc<Bridge>,
+    handler: BridgeHandler,
+    discord_events_rx: mpsc::UnboundedReceiver<DiscordBotEvent>,
+    discord_events_tx: mpsc::UnboundedSender<DiscordBotEvent>,
+    task_channels: TaskChannels,
+    shutdown_rx: watch::Receiver<bool>,
 }
 
 impl DiscordBot {
-    /// Get the HTTP client for sending messages.
-    pub fn http(&self) -> Arc<Http> {
-        self.http.clone()
+    pub async fn run(mut self) {
+        let client = &mut self.client;
+        let discord_events_rx = &mut self.discord_events_rx;
+        let handler = &mut self.handler;
+        let task_channels = &mut self.task_channels;
+        let shutdown_rx = &mut self.shutdown_rx;
+        tokio::select! {
+            _ = Self::run_connection(client, &self.token, &self.discord_events_tx) => {},
+            _ = Self::process_events(discord_events_rx, handler, task_channels, shutdown_rx) => {}
+        }
+        info!("Discord task ended");
     }
 
-    /// Run the Discord bot with automatic reconnection.
-    pub async fn run(mut self) {
+    async fn run_connection(client: &mut Option<Client>, token: &String, discord_events_tx: &mpsc::UnboundedSender<DiscordBotEvent>) {
         /// Create an exponential backoff iterator for Discord reconnection.
         /// 5s initial, 5min max, factor 1.1, with jitter, unlimited retries.
         fn discord_backoff() -> impl Iterator<Item = Duration> {
@@ -198,69 +251,13 @@ impl DiscordBot {
         loop {
             info!("Connecting to Discord...");
 
-            let mut client = match self.client.take() {
-                Some(c) => c,
+            let mut client = match client.take() {
+                Some(client) => client,
                 None => {
-                    // Need to rebuild the client for reconnection
-                    // Note: On reconnection, we lose the pending state and task channels.
-                    // This is a limitation - reconnection creates dummy channels.
-                    warn!("Rebuilding Discord client for reconnection (some functionality may be limited)...");
-
-                    // Create dummy channels for reconnection
-                    let (dummy_wow_tx, dummy_wow_rx) = mpsc::unbounded_channel::<BridgeMessage>();
-                    let (dummy_cmd_response_tx, dummy_cmd_response_rx) =
-                        mpsc::unbounded_channel::<CommandResponse>();
-                    let (dummy_status_tx, dummy_status_rx) =
-                        mpsc::unbounded_channel::<ActivityStatus>();
-                    let (dummy_dashboard_tx, dummy_dashboard_rx) =
-                        mpsc::unbounded_channel::<DashboardEvent>();
-                    let (dummy_shutdown_tx, dummy_shutdown_rx) = watch::channel(false);
-
-                    // Create minimal pending state
-                    let pending_state = PendingBridgeState::new(
-                        Vec::new(), // No pending configs on reconnection
-                        self.outgoing_wow_tx.clone(),
-                        self.command_tx.clone(),
-                        false,
-                        None,
-                        None,
-                        false,
-                        false,
-                        Some(self.dashboard_config.clone()),
-                    );
-
-                    let task_channels = TaskChannels {
-                        wow_rx: dummy_wow_rx,
-                        cmd_response_rx: dummy_cmd_response_rx,
-                        status_rx: dummy_status_rx,
-                        dashboard_rx: dummy_dashboard_rx,
-                    };
-
-                    // Create a dummy init signal for reconnection (already fired on first connect)
-                    let (dummy_init_tx, _) = oneshot::channel();
-
-                    let handler = BridgeHandler::new(
-                        self.bridge.clone(),
-                        pending_state,
-                        task_channels,
-                        self.command_tx.clone(),
-                        self.dashboard_config.clone(),
-                        dummy_shutdown_rx,
-                        dummy_init_tx,
-                    );
-
-                    match Client::builder(&self.token, self.intents)
-                        .event_handler(handler)
-                        .await
-                    {
+                    // serenity mostly handles reconnections itself.
+                    match build_client(token, discord_events_tx.clone()).await {
                         Ok(client) => {
-                            self.http = client.http.clone();
-                            // Clean up dummy senders
-                            drop(dummy_wow_tx);
-                            drop(dummy_cmd_response_tx);
-                            drop(dummy_status_tx);
-                            drop(dummy_dashboard_tx);
-                            drop(dummy_shutdown_tx);
+                            backoff = discord_backoff();
                             client
                         }
                         Err(e) => {
@@ -278,6 +275,9 @@ impl DiscordBot {
             match client.start().await {
                 Ok(()) => {
                     info!("Discord client disconnected normally");
+                    if let Err(error) = discord_events_tx.send(DiscordBotEvent::Disconnected) {
+                        warn!("Failed to process discord event: {}", error);
+                    }
                     break;
                 }
                 Err(e) => {
@@ -287,7 +287,136 @@ impl DiscordBot {
                         "Discord disconnected. Reconnecting in {:.1}s...",
                         delay.as_secs_f64(),
                     );
+                    if let Err(error) = discord_events_tx.send(DiscordBotEvent::Disconnected) {
+                        warn!("Failed to process discord event: {}", error);
+                    }
                     sleep(delay).await;
+                }
+            }
+        }
+    }
+
+    async fn process_events(
+        discord_events_rx: &mut mpsc::UnboundedReceiver<DiscordBotEvent>,
+        handler: &mut BridgeHandler,
+        task_channels: &mut TaskChannels,
+        shutdown_rx: &mut watch::Receiver<bool>,
+    ) {
+        let mut discord_user = None;
+        let mut discord_connection = None;
+
+        loop {
+            tokio::select! {
+                // Discord events
+                event = discord_events_rx.recv() => {
+                    match event {
+                        Some(event) => {
+                            match event {
+                                DiscordBotEvent::Ready(ready) => {
+                                    info!("Discord bot connected as {}", ready.user.name);
+                                    discord_user = Some(ready);
+                                }
+                                DiscordBotEvent::GuildCreate { context, guild } => {
+                                    let ready = match discord_user.as_ref() {
+                                        Some(v) => v,
+                                        None => {
+                                            error!("Received GuildCreate event before Ready event");
+                                            return;
+                                        }
+                                    };
+                                    handler.handle_guild_create(context.clone(), ready.clone(), guild).await;
+                                    discord_connection = Some(context);
+                                }
+                                DiscordBotEvent::Message { context, message } => {
+                                    handler.handle_message(context, message).await;
+                                }
+                                DiscordBotEvent::Disconnected => {
+                                    discord_user = None;
+                                    discord_connection = None;
+                                }
+                            }
+                        }
+                        None => {
+                            debug!("Discord events channel closed.");
+                            break;
+                        }
+                    }
+                }
+
+                // WoW -> Discord messages (drop if not connected)
+                message = task_channels.wow_rx.recv() => {
+                    match message {
+                        Some(message) => {
+                            if let Some(ref context) = discord_connection {
+                                handler.handle_wow_message(context, message).await;
+                            } else {
+                                debug!("Dropping WoW message - Discord not connected");
+                            }
+                        }
+                        None => {
+                            warn!("WoW message channel closed");
+                            break;
+                        }
+                    }
+                }
+
+                // Status updates (drop if not connected)
+                message = task_channels.status_rx.recv() => {
+                    match message {
+                        Some(message) => {
+                            if let Some(ref context) = discord_connection {
+                                handler.handle_status_update(context, message).await;
+                            } else {
+                                debug!("Dropping status update - Discord not connected");
+                            }
+                        }
+                        None => {
+                            warn!("Status update channel closed");
+                            break;
+                        }
+                    }
+                }
+
+                // Command responses (drop if not connected)
+                message = task_channels.cmd_response_rx.recv() => {
+                    match message {
+                        Some(message) => {
+                            if let Some(ref context) = discord_connection {
+                                handler.handle_command_response(context, message).await;
+                            } else {
+                                debug!("Dropping command response - Discord not connected");
+                            }
+                        }
+                        None => {
+                            warn!("Command response channel closed");
+                            break;
+                        }
+                    }
+                }
+
+                // Dashboard events (drop if not connected)
+                event = task_channels.dashboard_rx.recv() => {
+                    match event {
+                        Some(event) => {
+                            if let Some(ref context) = discord_connection {
+                                handler.handle_dashboard_event(context, event).await;
+                            } else {
+                                debug!("Dropping dashboard event - Discord not connected");
+                            }
+                        }
+                        None => {
+                            warn!("Dashboard event channel closed");
+                            break;
+                        }
+                    }
+                }
+
+                // Shutdown signal
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        info!("Shutdown signal received, stopping event processing");
+                        break;
+                    }
                 }
             }
         }

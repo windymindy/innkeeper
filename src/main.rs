@@ -305,7 +305,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    info!("Innkeeper shutting down...");
+    info!("Exiting...");
     Ok(())
 }
 

@@ -311,7 +311,7 @@ impl MessageResolver {
                 let mut grapheme = ch.to_string();
                 if let Some(&next) = chars.peek() {
                     if !next.is_ascii() {
-                        grapheme.push(chars.next().unwrap());
+                        grapheme.push(chars.next().unwrap_or_default());
                     }
                 }
 

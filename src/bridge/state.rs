@@ -1,19 +1,7 @@
 //! Bridge state management.
-//!
-//! Provides state types for the Discord-WoW bridge initialization lifecycle:
-//! - `PendingBridgeState`: Configuration waiting for Discord channel resolution
-//! - `ResolvedBridgeState`: Fully resolved state, immutable after creation
-//!
-//! The initialization flow is:
-//! 1. Create `PendingBridgeState` with channel configs
-//! 2. Wait for Discord `ready()` to get HTTP client and user ID
-//! 3. Wait for `guild_create()` to resolve channel names to IDs
-//! 4. Build `ResolvedBridgeState` and spawn background tasks with owned copies
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
-use serenity::http::Http;
 use serenity::model::channel::GuildChannel;
 use serenity::model::id::ChannelId;
 use tokio::sync::mpsc;
@@ -30,8 +18,6 @@ pub struct ChannelConfig {
     pub discord_channel_name: String,
     pub wow_chat_type: u8,
     pub wow_channel_name: Option<String>,
-    pub format_wow_to_discord: String,
-    pub format_discord_to_wow: String,
 }
 
 /// Pending state before Discord channels are resolved.
@@ -92,7 +78,6 @@ impl PendingBridgeState {
     pub fn resolve(
         self,
         guild_channels: &[GuildChannel],
-        http: Arc<Http>,
         self_user_id: u64,
     ) -> ResolvedBridgeState {
         let mut wow_to_discord: HashMap<(u8, Option<String>), Vec<ChannelConfig>> = HashMap::new();
@@ -204,7 +189,6 @@ impl PendingBridgeState {
             enable_dot_commands: self.enable_dot_commands,
             dot_commands_whitelist: self.dot_commands_whitelist,
             enable_commands_channels: self.enable_commands_channels,
-            http,
             self_user_id,
             enable_tag_failed_notifications: self.enable_tag_failed_notifications,
             dashboard_config: self.dashboard_config,
@@ -235,8 +219,6 @@ pub struct ResolvedBridgeState {
     pub dot_commands_whitelist: Option<Vec<String>>,
     /// Channels where commands are enabled (None = all channels).
     pub enable_commands_channels: Option<Vec<String>>,
-    /// HTTP client for Discord API calls.
-    pub http: Arc<Http>,
     /// Bot's user ID.
     pub self_user_id: u64,
     /// Whether to send tag resolution error notifications.
@@ -247,75 +229,7 @@ pub struct ResolvedBridgeState {
     pub dashboard_channel_id: Option<ChannelId>,
 }
 
-// ============================================================================
-// Task-specific context structs
-// ============================================================================
-
-/// Context for the WoW -> Discord forwarding task.
-///
-/// Contains everything needed to process and forward messages from WoW to Discord.
-#[derive(Clone)]
-pub struct WowToDiscordContext {
-    /// Map from (chat_type, channel_name) to Discord channels.
-    pub wow_to_discord: HashMap<(u8, Option<String>), Vec<ChannelConfig>>,
-    /// Message resolver for emoji/link/tag processing.
-    pub resolver: MessageResolver,
-    /// HTTP client for Discord API calls.
-    pub http: Arc<Http>,
-    /// Bot's user ID (for tag resolution).
-    pub self_user_id: u64,
-    /// Whether to send tag resolution error notifications.
-    pub enable_tag_failed_notifications: bool,
-    /// Sender for whisper replies (tag errors).
-    pub wow_tx: mpsc::UnboundedSender<BridgeMessage>,
-}
-
-impl WowToDiscordContext {
-    /// Create from resolved state.
-    pub fn from_resolved(state: &ResolvedBridgeState) -> Self {
-        Self {
-            wow_to_discord: state.wow_to_discord.clone(),
-            resolver: state.resolver.clone(),
-            http: state.http.clone(),
-            self_user_id: state.self_user_id,
-            enable_tag_failed_notifications: state.enable_tag_failed_notifications,
-            wow_tx: state.wow_tx.clone(),
-        }
-    }
-}
-
-/// Context for the Discord -> WoW message handling.
-///
-/// Contains everything needed to process incoming Discord messages.
-#[derive(Clone)]
-pub struct DiscordToWowContext {
-    /// Map from Discord channel ID to WoW config.
-    pub discord_to_wow: HashMap<ChannelId, ChannelConfig>,
-    /// Message resolver for mention/emoji processing.
-    pub resolver: MessageResolver,
-    /// Sender for messages going to WoW.
-    pub wow_tx: mpsc::UnboundedSender<BridgeMessage>,
-    /// Whether dot commands passthrough is enabled.
-    pub enable_dot_commands: bool,
-    /// Whitelist of allowed dot commands.
-    pub dot_commands_whitelist: Option<Vec<String>>,
-    /// Channels where commands are enabled.
-    pub enable_commands_channels: Option<Vec<String>>,
-}
-
-impl DiscordToWowContext {
-    /// Create from resolved state.
-    pub fn from_resolved(state: &ResolvedBridgeState) -> Self {
-        Self {
-            discord_to_wow: state.discord_to_wow.clone(),
-            resolver: state.resolver.clone(),
-            wow_tx: state.wow_tx.clone(),
-            enable_dot_commands: state.enable_dot_commands,
-            dot_commands_whitelist: state.dot_commands_whitelist.clone(),
-            enable_commands_channels: state.enable_commands_channels.clone(),
-        }
-    }
-
+impl ResolvedBridgeState {
     /// Check if a dot command should be sent directly to WoW.
     pub fn should_send_dot_command_directly(&self, message: &str) -> bool {
         if message.len() > 100 || !self.enable_dot_commands || !message.starts_with('.') {
@@ -354,47 +268,6 @@ impl DiscordToWowContext {
     }
 }
 
-/// Context for the command response forwarding task.
-#[derive(Clone)]
-pub struct CommandResponseContext {
-    /// Message resolver for emoji processing.
-    pub resolver: MessageResolver,
-    /// HTTP client for Discord API calls.
-    pub http: Arc<Http>,
-    /// Bot's user ID.
-    pub self_user_id: u64,
-}
-
-impl CommandResponseContext {
-    /// Create from resolved state.
-    pub fn from_resolved(state: &ResolvedBridgeState) -> Self {
-        Self {
-            resolver: state.resolver.clone(),
-            http: state.http.clone(),
-            self_user_id: state.self_user_id,
-        }
-    }
-}
-
-/// Context for the dashboard update task.
-#[derive(Clone)]
-pub struct DashboardContext {
-    /// Resolved dashboard channel ID.
-    pub channel_id: Option<ChannelId>,
-    /// Dashboard configuration.
-    pub config: GuildDashboardConfig,
-}
-
-impl DashboardContext {
-    /// Create from resolved state.
-    pub fn from_resolved(state: &ResolvedBridgeState, config: GuildDashboardConfig) -> Self {
-        Self {
-            channel_id: state.dashboard_channel_id,
-            config,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,7 +285,6 @@ mod tests {
             enable_dot_commands: true,
             dot_commands_whitelist: None,
             enable_commands_channels: None,
-            http: Arc::new(Http::new("test")),
             self_user_id: 123456789,
             enable_tag_failed_notifications: false,
             dashboard_config: None,
@@ -423,12 +295,11 @@ mod tests {
     #[test]
     fn test_dot_command_passthrough_enabled() {
         let state = create_test_resolved_state();
-        let ctx = DiscordToWowContext::from_resolved(&state);
 
-        assert!(ctx.should_send_dot_command_directly(".help"));
-        assert!(ctx.should_send_dot_command_directly(".guild info"));
-        assert!(!ctx.should_send_dot_command_directly("hello world"));
-        assert!(!ctx.should_send_dot_command_directly(""));
+        assert!(state.should_send_dot_command_directly(".help"));
+        assert!(state.should_send_dot_command_directly(".guild info"));
+        assert!(!state.should_send_dot_command_directly("hello world"));
+        assert!(!state.should_send_dot_command_directly(""));
     }
 
     #[test]
@@ -445,19 +316,17 @@ mod tests {
             enable_dot_commands: true,
             dot_commands_whitelist: Some(vec!["help".to_string(), "guild*".to_string()]),
             enable_commands_channels: None,
-            http: Arc::new(Http::new("test")),
             self_user_id: 123456789,
             enable_tag_failed_notifications: false,
             dashboard_config: None,
             dashboard_channel_id: None,
         };
-        let ctx = DiscordToWowContext::from_resolved(&state);
 
-        assert!(ctx.should_send_dot_command_directly(".help"));
-        assert!(ctx.should_send_dot_command_directly(".guild"));
-        assert!(ctx.should_send_dot_command_directly(".guildinfo"));
-        assert!(!ctx.should_send_dot_command_directly(".who"));
-        assert!(!ctx.should_send_dot_command_directly("hello"));
+        assert!(state.should_send_dot_command_directly(".help"));
+        assert!(state.should_send_dot_command_directly(".guild"));
+        assert!(state.should_send_dot_command_directly(".guildinfo"));
+        assert!(!state.should_send_dot_command_directly(".who"));
+        assert!(!state.should_send_dot_command_directly("hello"));
     }
 
     #[test]
@@ -474,29 +343,13 @@ mod tests {
             enable_dot_commands: false,
             dot_commands_whitelist: None,
             enable_commands_channels: None,
-            http: Arc::new(Http::new("test")),
             self_user_id: 123456789,
             enable_tag_failed_notifications: false,
             dashboard_config: None,
             dashboard_channel_id: None,
         };
-        let ctx = DiscordToWowContext::from_resolved(&state);
 
-        assert!(!ctx.should_send_dot_command_directly(".help"));
-        assert!(!ctx.should_send_dot_command_directly(".anything"));
-    }
-
-    #[test]
-    fn test_context_creation() {
-        let state = create_test_resolved_state();
-
-        let wow_ctx = WowToDiscordContext::from_resolved(&state);
-        assert_eq!(wow_ctx.self_user_id, state.self_user_id);
-
-        let discord_ctx = DiscordToWowContext::from_resolved(&state);
-        assert_eq!(discord_ctx.enable_dot_commands, state.enable_dot_commands);
-
-        let cmd_ctx = CommandResponseContext::from_resolved(&state);
-        assert_eq!(cmd_ctx.self_user_id, state.self_user_id);
+        assert!(!state.should_send_dot_command_directly(".help"));
+        assert!(!state.should_send_dot_command_directly(".anything"));
     }
 }

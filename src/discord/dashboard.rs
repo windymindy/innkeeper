@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use serenity::all::{ChannelId, Context, CreateEmbed, CreateMessage, EditMessage, Message, MessageId};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use crate::common::messages::GuildDashboardData;
 use crate::config::types::GuildDashboardConfig;
 use crate::common::resources::get_zone_name;
@@ -197,7 +197,7 @@ impl DashboardRenderer {
                 embed = embed.title(&title);
                 let timestamp = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs();
 
                 let status_icon = if data.online { ":green_circle:" } else { ":red_circle:" };
@@ -271,8 +271,8 @@ fn color_pad(value: &str, width: usize) -> String {
         "47;30", "47;31", "47;32", "47;33", "47;34", "47;35", "47;36", /*"47;37"*/
     ];
 
-    let first = value.chars().next().unwrap() as usize;
-    let last = value.chars().last().unwrap() as usize;
+    let first = value.chars().next().unwrap_or_default() as usize;
+    let last = value.chars().last().unwrap_or_default() as usize;
     // Scala uses string length (UTF-16 code units), Rust len() is bytes
     // We want character count to match logic better, though Scala logic is actually code units
     let len = value.chars().count();
