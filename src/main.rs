@@ -58,27 +58,12 @@ async fn main() -> Result<()> {
     // Extract realm host and port from realmlist
     let (realm_host, realm_port) = config.get_realm_host_port();
 
-    // ============================================================
-    // Create channels for communication
-    // ============================================================
-
-    // Create bridge channels (single source of truth)
     let channels = ChannelBundle::new();
-
-    // Clone senders needed for Discord bot
     let outgoing_wow_tx = channels.game.outgoing_wow_tx.clone();
-
-    // WoW -> Discord forwarding channel
     let (wow_to_discord_tx, wow_to_discord_rx) = mpsc::unbounded_channel::<BridgeMessage>();
-
-    // Discord commands channel
     let (discord_command_tx, mut discord_command_rx) = mpsc::unbounded_channel::<WowCommand>();
 
-    // ============================================================
-    // Create bridge (for centralized message filtering and routing)
     let bridge = Arc::new(game::Bridge::new(&config));
-
-    // Create Discord bot
     let discord_channels = DiscordChannels {
         outgoing_wow_tx: outgoing_wow_tx.clone(),
         wow_to_discord_rx,
@@ -89,16 +74,10 @@ async fn main() -> Result<()> {
         shutdown_rx: channels.game.shutdown_rx.clone(),
     };
 
-    // Create a one-shot channel to signal when Discord initialization is complete
     let (init_complete_tx, init_complete_rx) = tokio::sync::oneshot::channel::<()>();
-
     let discord_bot = DiscordBotBuilder::new(config.discord.token.clone(), config.clone(), discord_channels, bridge.clone())
         .build(init_complete_tx)
         .await?;
-
-    // ============================================================
-    // Spawn forwarding tasks
-    // ============================================================
 
     // Task 1: Game -> Discord forwarding
     let forward_to_discord = {
@@ -111,11 +90,11 @@ async fn main() -> Result<()> {
                     break;
                 }
             }
-            info!("Game -> Discord forwarding task ended");
+            debug!("Game -> Discord forwarding task ended");
         })
     };
 
-    // Task 2: Command converter (Discord commands -> Game commands)
+    // Task 2: Discord commands -> Bridge commands converter
     let command_converter = {
         let cmd_tx = channels.discord.command_tx;
         tokio::spawn(async move {
@@ -138,21 +117,13 @@ async fn main() -> Result<()> {
         })
     };
 
-    // ============================================================
     // Start Discord bot
-    // ============================================================
     info!("Starting Discord bot...");
-
-    // We need to wait for Discord to be ready before starting the game client
-    // because the game client needs channel mappings resolved from Discord
-    // to route messages correctly.
-
     let discord_task = tokio::spawn(async move {
         discord_bot.run().await;
     });
 
-    info!("Waiting for Discord to connect and resolve channels...");
-    // Wait for Discord initialization to complete (or timeout after 15s)
+    // Wait for Discord initialization
     let discord_init_success = match tokio::time::timeout(tokio::time::Duration::from_secs(15), init_complete_rx).await {
         Ok(Ok(())) => {
             info!("Discord initialization complete! Starting game client...");
@@ -170,61 +141,56 @@ async fn main() -> Result<()> {
 
     if !discord_init_success {
         error!("Failed to initialize Discord client - shutting down");
-        // Give a moment for error logs to flush
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         std::process::exit(1);
     }
 
-    // ============================================================
-    // Start Game client in separate task
-    // ============================================================
+    // Game client task
     let channels_to_join = bridge.channels_to_join();
-
-    // Prepare for loop
-    use backon::BackoffBuilder;
-    use common::ActivityStatus;
-    use std::time::Duration;
-
     let realm_host = realm_host.to_string();
     let config_clone = config.clone();
-
-    // Extract shutdown_tx before moving channels.game into the task
     let shutdown_tx = channels.control.shutdown_tx;
-    let game_channels = channels.game;
-
-    /// Create an exponential backoff iterator for game reconnection.
-    /// 5s initial, 5min max, factor 1.1, with jitter, unlimited retries.
-    fn game_backoff() -> impl Iterator<Item = Duration> {
-        backon::ExponentialBuilder::default()
-            .with_min_delay(Duration::from_secs(5))
-            .with_max_delay(Duration::from_mins(5))
-            .with_factor(1.1)
-            .with_jitter()
-            .without_max_times()
-            .build()
-    }
+    let mut game_channels = channels.game;
 
     let mut game_task = tokio::spawn(async move {
-        // Create client once
-        let mut game_client = GameClient::new(
-            config_clone.clone(),
-            game_channels,
-            channels_to_join,
-        );
+        use backon::BackoffBuilder;
+        use std::time::Duration;
+
+        fn game_backoff() -> impl Iterator<Item = Duration> {
+            backon::ExponentialBuilder::default()
+                .with_min_delay(Duration::from_secs(50))
+                .with_max_delay(Duration::from_mins(5))
+                .with_factor(1.1)
+                .with_jitter()
+                .without_max_times()
+                .build()
+        }
 
         let mut backoff = game_backoff();
+        let mut connected = false;
+
+        // Clone receivers for continuous reading
+        let mut outgoing_rx = game_channels.outgoing_wow_rx;
+        let mut command_rx = game_channels.command_rx;
+        let cmd_response_tx = game_channels.command_response_tx.clone();
 
         loop {
-            // Check for shutdown before connecting
-            if game_client.channels.shutdown_rx.has_changed().unwrap_or(false) && *game_client.channels.shutdown_rx.borrow() {
-                info!("Shutdown signal detected, stopping reconnection loop");
+            // Check for shutdown
+            if game_channels.shutdown_rx.has_changed().unwrap_or(false) && *game_channels.shutdown_rx.borrow() {
+                info!("Shutdown signal detected, stopping game task");
                 break;
             }
 
+            if connected {
+                // This shouldn't happen - connected state is handled inside the block below
+                connected = false;
+                continue;
+            }
+
+            // Not connected - try to authenticate
             info!("Authenticating with realm server...");
-            // Send Connecting status (may fail if shutting down)
-            if let Err(e) = game_client.channels.status_tx.send(ActivityStatus::Connecting) {
-                debug!("Status channel closed (shutdown in progress): {}", e);
+            if let Err(e) = game_channels.status_tx.send(common::messages::ActivityStatus::Connecting) {
+                debug!("Failed to send status: {}", e);
             }
 
             match connect_and_authenticate(
@@ -236,49 +202,98 @@ async fn main() -> Result<()> {
             ).await {
                 Ok(session) => {
                     info!("Realm authentication successful!");
-                    backoff = game_backoff(); // Reset backoff on successful connection
+                    backoff = game_backoff();
+                    connected = true;
 
-                    // Run game client
+                    // Create game client and run
+                    let mut game_client = GameClient::new(
+                        config_clone.clone(),
+                        bridge::GameChannels {
+                            wow_tx: game_channels.wow_tx.clone(),
+                            outgoing_wow_tx: game_channels.outgoing_wow_tx.clone(),
+                            outgoing_wow_rx: outgoing_rx,
+                            command_rx,
+                            command_response_tx: game_channels.command_response_tx.clone(),
+                            shutdown_rx: game_channels.shutdown_rx.clone(),
+                            status_tx: game_channels.status_tx.clone(),
+                            dashboard_tx: game_channels.dashboard_tx.clone(),
+                        },
+                        channels_to_join.clone(),
+                    );
+
                     match game_client.run(session).await {
                         Ok(()) => info!("Game client disconnected"),
                         Err(e) => error!("Game client error: {}", e),
                     }
+
+                    // After disconnect, extract receivers back
+                    outgoing_rx = game_client.channels.outgoing_wow_rx;
+                    command_rx = game_client.channels.command_rx;
+                    connected = false;
                 }
                 Err(e) => {
                     error!("Realm authentication failed: {}", e);
                 }
             }
 
-            // We disconnected or failed to connect - notify Discord (may fail if shutting down)
-            if let Err(e) = game_client.channels.status_tx.send(ActivityStatus::Disconnected) {
-                debug!("Status channel closed: {}", e);
+            if let Err(e) = game_channels.status_tx.send(common::messages::ActivityStatus::Disconnected) {
+                debug!("Failed to send status: {}", e);
             }
-            // Send dashboard offline event
-            use common::messages::DashboardEvent;
-            if let Err(e) = game_client.channels.dashboard_tx.send(DashboardEvent::SetOffline) {
-                debug!("Dashboard channel closed: {}", e);
+            if let Err(e) = game_channels.dashboard_tx.send(common::messages::DashboardEvent::SetOffline) {
+                debug!("Failed to send dashboard: {}", e);
             }
 
             // Calculate backoff delay
             let delay = backoff.next().unwrap_or(Duration::from_mins(5));
             info!("Reconnecting in {:.1} seconds...", delay.as_secs_f64());
 
-            // Wait for delay OR shutdown signal
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {},
-                _ = game_client.channels.shutdown_rx.changed() => {
-                    if *game_client.channels.shutdown_rx.borrow() {
-                        info!("Shutdown signal received during backoff");
+            // Wait for backoff delay while draining channels
+            let sleep = tokio::time::sleep(delay);
+            tokio::pin!(sleep);
+
+            loop {
+                tokio::select! {
+                    // Check if delay is complete - time to reconnect
+                    _ = &mut sleep => {
                         break;
+                    }
+                    // Drain messages silently while waiting
+                    _ = outgoing_rx.recv() => {
+                        debug!("Dropping message - game disconnected");
+                    }
+                    // Drain commands with error response while waiting
+                    cmd = command_rx.recv() => {
+                        match cmd {
+                            Some(BridgeCommand::Who { reply_channel, .. }) |
+                            Some(BridgeCommand::Gmotd { reply_channel }) => {
+                                let error_response = discord::commands::CommandResponse {
+                                    channel_id: reply_channel,
+                                    content: common::messages::CommandResponseData::Error(
+                                        "Not connected to WoW. Please try again later.".to_string()
+                                    ),
+                                };
+                                if let Err(e) = cmd_response_tx.send(error_response) {
+                                    warn!("Failed to send command response: {}", e);
+                                }
+                            }
+                            None => {
+                                warn!("Command channel closed");
+                                return;
+                            }
+                        }
+                    }
+                    // Check for shutdown
+                    _ = game_channels.shutdown_rx.changed() => {
+                        if *game_channels.shutdown_rx.borrow() {
+                            return;
+                        }
                     }
                 }
             }
         }
     });
 
-    // ============================================================
-    // Run both clients
-    // ============================================================
+    // Run all tasks
     let shutdown = tokio::select! {
         biased;
         _ = shutdown_signal() => {
@@ -291,11 +306,9 @@ async fn main() -> Result<()> {
         _ = command_converter => false,
     };
 
-    // Handle graceful shutdown
     if shutdown {
-        // Signal game client to logout (fire-and-forget - if channel closed, client is already gone)
         if let Err(e) = shutdown_tx.send(true) {
-            debug!("Shutdown channel closed (game client already exited): {}", e);
+            debug!("Failed to send shutdown: {}", e);
         }
         let timeout = tokio::time::Duration::from_secs(5);
         match tokio::time::timeout(timeout, game_task).await {

@@ -352,6 +352,7 @@ impl Bridge {
             CommandResponseData::GuildMotd(motd, _guild_name) => {
                 self.format_guild_motd(motd.as_deref())
             }
+            CommandResponseData::Error(msg) => format!("⚠️ {}", msg),
         }
     }
 

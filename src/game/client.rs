@@ -68,9 +68,21 @@ impl GameClient {
         );
         let mut shutdown_rx = self.channels.shutdown_rx.clone();
 
-        // Ping interval (30s)
-        let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        let now = tokio::time::Instant::now();
+
+        // Ping interval (30s initial delay, then every 30s)
+        let mut ping_interval = tokio::time::interval_at(
+            now + tokio::time::Duration::from_secs(30),
+            tokio::time::Duration::from_secs(30),
+        );
         ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        // KeepAlive interval (15s initial delay, then every 30s) - TBC/WotLK specific
+        let mut keepalive_interval = tokio::time::interval_at(
+            now + tokio::time::Duration::from_secs(15),
+            tokio::time::Duration::from_secs(30),
+        );
+        keepalive_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         info!("Game connection established");
 
@@ -110,6 +122,11 @@ impl GameClient {
                 // Ping keepalive every 30 seconds
                 _ = ping_interval.tick() => {
                     self.handle_ping_tick(&mut handler, &mut connection).await?;
+                }
+
+                // KeepAlive packet every 30 seconds (TBC/WotLK specific)
+                _ = keepalive_interval.tick() => {
+                    self.handle_keepalive_tick(&mut handler, &mut connection).await?;
                 }
 
                 // Outgoing messages from bridge (Discord -> WoW)
@@ -579,6 +596,24 @@ impl GameClient {
                     debug!("Requested guild roster update");
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn handle_keepalive_tick<S>(
+        &self,
+        handler: &mut GameHandler,
+        connection: &mut GameConnection<S>,
+    ) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        if handler.in_world {
+            let keepalive = handler.build_keep_alive();
+            if let Err(e) = connection.send(keepalive.into()).await {
+                return Err(anyhow!("Failed to send keepalive: {}", e));
+            }
+            debug!("Sent CMSG_KEEP_ALIVE");
         }
         Ok(())
     }

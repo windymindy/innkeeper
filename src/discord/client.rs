@@ -9,6 +9,7 @@ use std::time::Duration;
 use serenity::prelude::*;
 use serenity::async_trait;
 use serenity::Client;
+use serenity::http::HttpBuilder;
 use serenity::model::gateway::Ready;
 use serenity::model::guild::Guild;
 
@@ -198,8 +199,20 @@ async fn build_client(token: &String, discord_events_tx: mpsc::UnboundedSender<D
         | GatewayIntents::GUILDS
         | GatewayIntents::GUILD_MEMBERS
         | GatewayIntents::GUILD_PRESENCES;
+
+    // Build a custom reqwest client with timeout settings
+    let reqwest_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(10))
+        .build()?;
+
+    // Build the Serenity HTTP client with our custom reqwest client
+    let http = HttpBuilder::new(token)
+        .client(reqwest_client)
+        .build();
+
     let events = DiscordBotEvents::new(discord_events_tx);
-    let client = Client::builder(token, intents)
+    let client = serenity::client::ClientBuilder::new_with_http(http, intents)
         .event_handler(events)
         .await?;
     Ok(client)
@@ -221,14 +234,33 @@ pub struct DiscordBot {
 
 impl DiscordBot {
     pub async fn run(mut self) {
+        // Extract shard manager before we move client into run_connection
+        let shard_manager = self.client.as_ref()
+            .map(|c| c.shard_manager.clone());
         let client = &mut self.client;
         let discord_events_rx = &mut self.discord_events_rx;
         let handler = &mut self.handler;
         let task_channels = &mut self.task_channels;
-        let shutdown_rx = &mut self.shutdown_rx;
+        let mut shutdown_rx = self.shutdown_rx.clone();
+
         tokio::select! {
             _ = Self::run_connection(client, &self.token, &self.discord_events_tx) => {},
-            _ = Self::process_events(discord_events_rx, handler, task_channels, shutdown_rx) => {}
+            _ = Self::process_events(discord_events_rx, handler, task_channels, &mut self.shutdown_rx) => {},
+            _ = async {
+                // Wait for shutdown signal
+                loop {
+                    shutdown_rx.changed().await.ok();
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                // Gracefully shutdown Discord gateway
+                if let Some(ref manager) = shard_manager {
+                    info!("Initiating graceful Discord shutdown...");
+                    manager.shutdown_all().await;
+                    info!("Discord shutdown complete");
+                }
+            } => {}
         }
         info!("Discord task ended");
     }

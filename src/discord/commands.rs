@@ -89,14 +89,9 @@ impl CommandHandler {
             reply_channel: msg.channel_id.get(),
         };
 
-        if self.command_tx.send(command).is_err() {
-            msg.channel_id
-                .say(&ctx.http, "Error: Not connected to WoW server.")
-                .await?;
-        } else {
-            // The response will be sent asynchronously
-            msg.react(&ctx.http, '👀').await.ok();
-        }
+        self.command_tx.send(command)?;
+
+        msg.react(&ctx.http, '👀').await.ok();
 
         Ok(())
     }
@@ -109,13 +104,9 @@ impl CommandHandler {
             reply_channel: msg.channel_id.get(),
         };
 
-        if self.command_tx.send(command).is_err() {
-            msg.channel_id
-                .say(&ctx.http, "Error: Not connected to WoW server.")
-                .await?;
-        } else {
-            msg.react(&ctx.http, '📜').await.ok();
-        }
+        self.command_tx.send(command)?;
+
+        msg.react(&ctx.http, '📜').await.ok();
 
         Ok(())
     }

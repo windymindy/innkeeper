@@ -24,7 +24,7 @@ use crate::protocol::game::guild::{
 };
 use crate::protocol::game::packets::{
     AuthChallenge, AuthResponse, AuthSession, CharEnum, CharEnumRequest, CharacterInfo, GameObjUse,
-    InitWorldStates, LoginVerifyWorld, Ping, PlayerLogin, Pong,
+    InitWorldStates, KeepAlive, LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 use crate::protocol::packets::PacketDecode;
 use anyhow::Result;
@@ -200,6 +200,11 @@ impl GameHandler {
             sequence,
             latency: 0,
         }
+    }
+
+    /// Build CMSG_KEEP_ALIVE (TBC/WotLK keepalive, empty packet).
+    pub fn build_keep_alive(&self) -> KeepAlive {
+        KeepAlive
     }
 
     /// Build CMSG_LOGOUT_REQUEST.

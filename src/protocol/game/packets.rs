@@ -377,6 +377,19 @@ impl PacketDecode for Pong {
     }
 }
 
+/// CMSG_KEEP_ALIVE packet (empty payload - TBC/WotLK only).
+#[derive(Debug, Clone, Default)]
+pub struct KeepAlive;
+
+impl From<KeepAlive> for crate::protocol::packets::Packet {
+    fn from(_: KeepAlive) -> Self {
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_KEEP_ALIVE,
+            Bytes::new(),
+        )
+    }
+}
+
 /// CMSG_CHAR_ENUM request packet (empty payload).
 #[derive(Debug, Clone, Default)]
 pub struct CharEnumRequest;

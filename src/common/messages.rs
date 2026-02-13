@@ -115,6 +115,8 @@ pub enum CommandResponseData {
     WhoSearch(String, Option<GuildMember>, Option<String>), // (search_input, member, guild_name)
     /// Guild MOTD (!gmotd).
     GuildMotd(Option<String>, Option<String>), // (motd, guild_name)
+    /// Error response (e.g., game disconnected).
+    Error(String),
 }
 
 /// Represents a change in the bot's activity status.
