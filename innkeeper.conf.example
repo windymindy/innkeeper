@@ -225,7 +225,7 @@ chat {
 
 filters {
   enabled=false
-  # patterns are Java Regexes. Google has the answers you seek.
+  # patterns use fancy-regex syntax (Rust). Supports lookaheads, lookbehinds, and other advanced features.
   patterns=[
     # Example: case insensitive filter for messages containing all 3 words g?ld, level, and item in any order
     # ".*(?i)(?=.*g.?ld)(?=.*level)(?=.*item).*$"

@@ -35,7 +35,7 @@
 | **Expansion Support** | Ascension only (WotLK-based) | Reduces complexity by ~40%, focuses on actual use case |
 | **Migration Strategy** | Full rewrite | Clean Rust architecture, not constrained by Scala patterns, separate repository |
 | **Async Runtime** | Tokio | Industry standard, excellent ecosystem |
-| **Discord Library** | TBD (Serenity or Twilight) | Research during implementation |
+| **Discord Library** | Serenity 0.12 | Mature, well-documented, good async support |
 | **Config Format** | HOCON | Keep configs compatible |
 | **Networking** | tokio + bytes | Zero-copy parsing, efficient buffer management |
 
@@ -90,7 +90,6 @@ innkeeper/
 │   ├── game/                   # Game client logic
 │   │   ├── mod.rs
 │   │   ├── client.rs          # Game client main loop
-│   │   ├── bridge.rs          # Bridge re-exports
 │   │   └── formatter.rs       # Message formatting
 │   │
 │   ├── discord/                # Discord bot integration
@@ -98,14 +97,14 @@ innkeeper/
 │   │   ├── client.rs          # Discord bot setup
 │   │   ├── handler.rs         # Message event handling
 │   │   ├── commands.rs        # Slash/text commands (!who, etc)
+│   │   ├── dashboard.rs       # Guild online member dashboard
 │   │   └── resolver.rs        # Emoji, link, tag resolution
 │   │
 │   └── common/                 # Shared types and utilities
 │       ├── mod.rs
 │       ├── messages.rs         # Message types
 │       ├── types.rs            # Shared data structures
-│       ├── resources.rs        # Zone names, class names, etc.
-│       └── reconnect.rs        # Exponential backoff
+│       └── resources.rs        # Zone names, class names, etc.
 ```
 
 ### 3.2 Component Diagram
@@ -169,7 +168,7 @@ Dependencies are defined in `Cargo.toml`. Key dependencies include:
 - **serde** - Configuration serialization
 - **anyhow** - Error handling
 - **tracing** - Logging
-- **regex** - Message filtering
+- **fancy-regex** - Message filtering (supports lookaheads/lookbehinds)
 
 ### 4.2 Cryptography Implementation
 
@@ -177,7 +176,7 @@ Dependencies are defined in `Cargo.toml`. Key dependencies include:
 Ascension version does not use `SRPClient.scala`
 Port from `HandshakeAscension.scala`.
 
-#### Header Encryption (crypto/header.rs)
+#### Header Encryption (protocol/game/header.rs)
 Ascension version does not use HMAC-SHA1 based header encryption.
 Port from game packet encoder and decoder.
 
@@ -207,8 +206,8 @@ Since we're targeting Ascension only:
 |-------------|--------------|
 | `protocol/realm/handler.rs` | `realm/RealmPacketHandler.scala`, `realm/HandshakeAscension.scala` |
 | `protocol/game/handler.rs` | `game/GamePacketHandlerWotLK.scala` |
-| `protocol/crypto/header.rs` | `game/GameHeaderCryptWotLK.scala` |
-| `discord/bot.rs` | `discord/Discord.scala` |
+| `protocol/game/header.rs` | `game/GameHeaderCryptWotLK.scala` |
+| `discord/client.rs` | `discord/Discord.scala` |
 | `config/parser.rs` | `common/Config.scala` |
 
 ---

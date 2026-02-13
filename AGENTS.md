@@ -7,8 +7,8 @@ It connects to a World of Warcraft private server as a game client and relays me
 
 The local copy of the original repository is located in the ../wowchat_ascension folder in the parent directory.
 
-**Current State:** Scala/JVM implementation (~6,500 lines)
-**Target State:** Rust/Tokio rewrite (~3,000-4,000 lines estimated)
+**Original:** Scala/JVM implementation (~6,500 lines)
+**Current State:** Rust/Tokio rewrite (~11,000 lines across 39 files)
 
 ### Before Implementation
 1. Read `documentation/001_design.md` for full architecture

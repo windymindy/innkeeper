@@ -12,7 +12,6 @@ Innkeeper is a complete rewrite of [WoWChat](https://github.com/fjaros/wowchat) 
 - ✅ **Custom Channels**: Support for any WoW custom channels
 - ✅ **Discord Commands**: `!who` for online members, `!gmotd` for guild MOTD
 - ✅ **Message Filtering**: Regex-based filters for both directions
-- ✅ **Dot Commands**: Send WoW commands from Discord (`.help`, `.gm on`, etc.)
 - ✅ **Auto-Reconnect**: Graceful handling of disconnections
 - ✅ **Item Links**: Converts WoW item links to Ascension database URLs
 - ✅ **Low Resource Usage**: Rust efficiency (~10-20MB RAM, minimal CPU)
@@ -26,11 +25,11 @@ Innkeeper is a complete rewrite of [WoWChat](https://github.com/fjaros/wowchat) 
 - Discord bot token ([create one](https://discord.com/developers/applications))
 - Ascension WoW account
 
-### Installation
+### Build from sources
 
 ```bash
 # Clone the repository
-git clone https://github.com/anomalyco/innkeeper.git
+git clone https://github.com/windymindy/innkeeper.git
 cd innkeeper
 
 # Build release binary
@@ -54,8 +53,8 @@ discord {
 }
 
 wow {
-    realmlist = "logon.project-ascension.com:3724"
-    realm = "Laughing Skull"  # or "Sargeras"
+    realmlist = "logon.project-ascension.com"
+    realm = "Laughing Skull"
     account = "your_username"
     password = "your_password"
     character = "YourCharacterName"
@@ -65,22 +64,13 @@ chat {
     channels = [
         {
             direction = "both"
-            wow = {
-                type = "Guild"
+            wow {
+                type = Guild
             }
-            discord = {
-                channel = "guild-chat"  # Discord channel name
+            discord {
+                channel = "guild-chat"  # Discord channel name or ID
             }
         }
-    ]
-}
-
-# Optional: Message filters
-filters {
-    enabled = true
-    patterns = [
-        "^\\[System\\].*",  # Block system messages
-        ".*achievement.*"   # Block achievement spam
     ]
 }
 ```
@@ -107,10 +97,10 @@ INNKEEPER_CONFIG=/path/to/config.conf ./target/release/innkeeper
 You can override configuration values with environment variables:
 
 ```bash
-export INNKEEPER_DISCORD_TOKEN="your_token_here"
-export INNKEEPER_WOW_USERNAME="your_username"
-export INNKEEPER_WOW_PASSWORD="your_password"
-export INNKEEPER_WOW_CHARACTER="YourCharacter"
+export DISCORD_TOKEN="your_token_here"
+export WOW_ACCOUNT="your_username"
+export WOW_PASSWORD="your_password"
+export WOW_CHARACTER="YourCharacter"
 
 ./target/release/innkeeper
 ```
@@ -131,10 +121,14 @@ discord {
     dot_commands_whitelist = ["help", "gm"]
 
     # Optional: Restrict commands to specific channels (empty = all channels)
+    # Accepts channel names (strings) or channel IDs (integers)
     enable_commands_channels = ["bot-commands"]
 
     # Optional: Notify on failed tag/mention resolution (default: true)
     enable_tag_failed_notifications = true
+
+    # Optional: Enable markdown in messages sent from WoW to Discord (default: false)
+    enable_markdown = false
 }
 ```
 
@@ -146,17 +140,17 @@ wow {
     # Treat server's MotD as SYSTEM message (default: true)
     enable_server_motd = true
 
-    # Realm list server (with optional port)
-    realmlist = "logon.project-ascension.com:3724"
+    # Realm list server (with optional port, default port: 3724)
+    realmlist = "logon.project-ascension.com"
 
     # Realm name to connect to
     realm = "Laughing Skull"
 
-    # Account credentials
+    # Account credentials (or use WOW_ACCOUNT/WOW_PASSWORD env vars)
     account = "your_username"
     password = "your_password"
 
-    # Character to log in with
+    # Character to log in with (or use WOW_CHARACTER env var)
     character = "YourCharacterName"
 }
 ```
@@ -175,7 +169,7 @@ chat {
 
             # WoW channel configuration
             wow = {
-                # Channel type: Guild, Officer, Say, Yell, Emote, System, Channel, Whisper
+                # Channel type: Guild, Officer, Say, Yell, Emote, System, Channel, Whisper, Whispering
                 type = "Guild"
 
                 # Channel name (for custom "Channel" type)
@@ -187,7 +181,7 @@ chat {
 
             # Discord channel configuration
             discord = {
-                # Discord channel name (not ID)
+                # Discord channel name or ID
                 channel = "guild-chat"
 
                 # Format string (optional)
@@ -200,12 +194,20 @@ chat {
 
 ### Message Filters
 
+Global filters apply to all channels. You can also set per-channel filters on each
+`wow {}` or `discord {}` block (see the example config for details).
+
+Filter priority order (first non-disabled filter wins):
+1. Discord channel filters (highest priority, applies to both directions)
+2. WoW channel filters (applies to WoW -> Discord only)
+3. Global filters (lowest priority, applies to all channels)
+
 ```hocon
 filters {
     # Whether filtering is enabled (default: true)
     enabled = true
 
-    # Regex patterns to filter (Java regex syntax)
+    # Regex patterns to filter (fancy-regex syntax, supports lookaheads/lookbehinds)
     patterns = [
         "^\\[System\\].*",           # System messages
         ".*has earned the achievement.*",  # Achievements
@@ -235,7 +237,16 @@ guild {
 ```hocon
 guild-dashboard {
     enabled = true
-    channel = "guild-dashboard"  # Discord channel for online member list
+    channel = "guild-dashboard"  # Discord channel name or ID for online member list
+}
+```
+
+### Quirks (Optional)
+
+```hocon
+quirks {
+    # Make the bot character sit (default: false)
+    sit = false
 }
 ```
 
@@ -306,8 +317,6 @@ cargo build
 # Release build (optimized)
 cargo build --release
 
-# With specific features
-cargo build --release --features "some-feature"
 ```
 
 ### Code Structure
@@ -349,20 +358,19 @@ src/
 ├── game/                   # Game client logic
 │   ├── mod.rs
 │   ├── client.rs          # Game client main loop
-│   ├── bridge.rs          # Bridge re-exports
 │   └── formatter.rs       # Message formatting
 ├── discord/                # Discord bot integration
 │   ├── mod.rs
 │   ├── client.rs          # Discord bot setup
 │   ├── handler.rs         # Message event handling
 │   ├── commands.rs        # Slash/text commands (!who, etc)
+│   ├── dashboard.rs       # Guild online member dashboard
 │   └── resolver.rs        # Emoji, link, tag resolution
 └── common/                 # Shared types and utilities
     ├── mod.rs
     ├── messages.rs         # Message types
     ├── types.rs            # Shared data structures
-    ├── resources.rs        # Zone names, class names, etc.
-    └── reconnect.rs        # Exponential backoff
+    └── resources.rs        # Zone names, class names, etc.
 ```
 
 ## Troubleshooting
@@ -376,20 +384,10 @@ src/
 - Check that realm host and port are correct
 - Ascension may have changed their login server
 
-### "Failed to send message to WoW"
-- Message might be too long (max 255 characters in WoW)
-- Character might not have permission to speak in that channel
-- Check that you've joined the channel (for custom channels)
-
 ### Discord bot doesn't respond
 - Ensure bot has proper permissions in Discord
 - Check that channel IDs are correct (enable Developer Mode)
 - Verify the bot token is valid
-
-### Connection keeps dropping
-- Ascension may have stricter anti-bot measures
-- Check your internet connection stability
-- Review logs for specific disconnect reasons
 
 ## Performance
 
@@ -400,16 +398,6 @@ Innkeeper is designed for efficiency:
 - **Network**: Only active traffic, no polling
 - **Startup**: < 5 seconds to full connection
 
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass (`cargo test`)
-5. Submit a pull request
-
 ## Acknowledgments
 
 - Based on [WoWChat](https://github.com/fjaros/wowchat) by fjaros
@@ -418,8 +406,7 @@ Contributions welcome! Please:
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/anomalyco/innkeeper/issues)
-- **Discord**: [Ascension Discord](https://discord.gg/ascension)
+- **Issues**: [GitHub Issues](https://github.com/windymindy/innkeeper/issues)
 
 ---
 
