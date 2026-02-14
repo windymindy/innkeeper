@@ -47,27 +47,25 @@ impl DashboardRenderer {
 
         // If we don't have message IDs, try to find them in history
         if self.message_ids.is_empty() {
-            let title = format!("{} — {}", data.guild_name, data.realm);
+            let title = format!("{} — {}", data.guild_name, data.realm).to_lowercase();
             if let Ok(messages) = channel_id.messages(&ctx.http, serenity::all::GetMessages::new().limit(10)).await {
                 let self_id = ctx.cache.current_user().id;
 
-                let mut found_messages: Vec<Message> = messages.into_iter()
+                let found_messages: Vec<Message> = messages.into_iter()
                     .rev() // Oldest first (like Scala .reverse)
                     .skip_while(|m| {
                         // Skip until we find the first dashboard message (first page with title)
-                        !(m.author.id == self_id
-                            && !m.embeds.is_empty()
-                            && m.embeds[0].title.as_ref().map_or(false, |t| t == &title))
+                        m.author.id != self_id
+                        || m.embeds.len() != 1
+                        || m.embeds[0].title.as_ref().map_or(true, |t| t.to_lowercase() != title)
                     })
                     .take_while(|m| {
                         // Take all contiguous messages authored by us with embeds
                         // First page has the title, subsequent pages have null title but are contiguous
                         m.author.id == self_id
-                            && !m.embeds.is_empty()
-                            && (m.embeds[0].title.as_ref().map_or(true, |t| t == &title || t.is_empty())
-                                || m.embeds[0].description.as_ref().map_or(false, |d|
-                                    d.contains("```ansi") || d == "\u{3164}"))
-                            && m.embeds[0].description.as_ref().map_or(false, |d| !d.is_empty())
+                        && m.embeds.len() == 1
+                        && m.embeds[0].title.as_ref().map_or(true, |t| t.is_empty() || t.to_lowercase() == title)
+                        && m.embeds[0].description.as_ref().map_or(false, |d| !d.is_empty())
                     })
                     .collect();
 

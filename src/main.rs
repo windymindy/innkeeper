@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
 
         fn game_backoff() -> impl Iterator<Item = Duration> {
             backon::ExponentialBuilder::default()
-                .with_min_delay(Duration::from_secs(50))
+                .with_min_delay(Duration::from_secs(5))
                 .with_max_delay(Duration::from_mins(5))
                 .with_factor(1.1)
                 .with_jitter()

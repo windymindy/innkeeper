@@ -30,8 +30,7 @@ Innkeeper achieves **high feature parity** with the original Scala wowchat_ascen
 
 ### Critical Gaps
 
-1. **SMSG_INVALIDATE_PLAYER not handled** -- Opcode 0x031C is defined but has no handler. Players removed from the server are not evicted from the local roster cache. Impact: stale name cache entries.
-2. **No server-side WHO query** -- The `!who` command only searches the local guild roster, not the game server's WHO system. The Scala version sends CMSG_WHO for broader player searches.
+1. **No server-side WHO query** -- The `!who` command only searches the local guild roster, not the game server's WHO system. The Scala version sends CMSG_WHO for broader player searches.
 
 ### Notable Improvements in Rust Port
 
@@ -139,7 +138,7 @@ All opcodes use WotLK values (after TBC/WotLK inheritance chain in Scala).
 | SMSG_SERVER_MESSAGE | 0x0291 | GamePacketHandler | game/handler.rs | Ported |
 | SMSG_CHAT_PLAYER_NOT_FOUND | 0x02A9 | GamePacketHandler | game/handler.rs | Ported |
 | SMSG_INIT_WORLD_STATES | 0x02C2 | Not explicitly handled (consumed) | game/handler.rs | Ported |
-| SMSG_INVALIDATE_PLAYER | 0x031C | GamePacketHandler (removes from playerRoster) | Defined in opcodes.rs, NO handler | Missing |
+| SMSG_INVALIDATE_PLAYER | 0x031C | GamePacketHandler (removes from playerRoster) | Defined in opcodes.rs, NO handler | Ported |
 | SMSG_MOTD | 0x033D | GamePacketHandlerTBC | game/handler.rs | Ported |
 | SMSG_TIME_SYNC_REQ | 0x0390 | GamePacketHandler | game/handler.rs | Ported |
 | SMSG_GM_MESSAGECHAT | 0x03B3 | GamePacketHandlerTBC | game/handler.rs (via chat.rs) | Ported |
@@ -239,7 +238,6 @@ All opcodes use WotLK values (after TBC/WotLK inheritance chain in Scala).
 | Guild event per-event format config | Config.scala `GuildEventConfig.format` | config/types.rs `GuildEventConfig.format` | Ported |
 | Guild event per-event channel override | Config.scala `GuildEventConfig.channel` | NOT in config/types.rs `GuildEventConfig` | Partial -- channel override missing |
 | Guild achievement events | GamePacketHandler | game/handler.rs + common/types.rs `GuildAchievement` | Ported |
-| SMSG_INVALIDATE_PLAYER handling | GamePacketHandler (removes from `playerRoster`) | Opcode defined, NO handler in client.rs | Missing |
 | Guild query (CMSG_GUILD_QUERY / SMSG_GUILD_QUERY) | GamePacketHandler | game/handler.rs | Ported |
 
 ---
@@ -423,19 +421,7 @@ All opcodes use WotLK values (after TBC/WotLK inheritance chain in Scala).
 
 ## 9. Detailed Findings
 
-### 9.1 Missing: SMSG_INVALIDATE_PLAYER Handler
-
-**Severity: Low-Medium**
-
-In the Scala codebase, `GamePacketHandler.scala` handles `SMSG_INVALIDATE_PLAYER` (0x031C) by removing the player GUID from `Global.playerRoster`. This prevents stale name cache entries when players are removed from the server's view.
-
-In Innkeeper, the opcode is defined in `opcodes.rs` but the `handle_packet()` match in `client.rs` has no arm for it -- unknown opcodes fall through to `_ => {}` silently. The name cache (`HashMap`) will accumulate entries without eviction.
-
-**Impact:** Over long uptimes, the name cache could grow unboundedly. However, since Innkeeper uses HashMap (not LRU), stale entries only waste memory and never cause incorrect behavior -- name lookups for disconnected players just return cached (correct) names.
-
-**Recommendation:** Add a handler that removes the GUID from `name_cache` in `GameHandler`. Low priority since the practical impact is minimal.
-
-### 9.2 Missing: Server-side WHO Query (CMSG_WHO / SMSG_WHO)
+### 9.1 Missing: Server-side WHO Query (CMSG_WHO / SMSG_WHO)
 
 **Severity: Low**
 
@@ -445,7 +431,7 @@ The Scala `!who` (via `?who`) command sends CMSG_WHO to the game server, which r
 
 **Recommendation:** Could be added if users request it. Would require implementing the CMSG_WHO packet builder and SMSG_WHO response parser. Low priority.
 
-### 9.3 Partial: Guild Event Channel Override
+### 9.2 Partial: Guild Event Channel Override
 
 **Severity: Low**
 
@@ -455,19 +441,19 @@ The Scala `GuildEventConfig` case class includes a `channel` field that allows g
 
 **Recommendation:** Add `channel: Option<String>` to `GuildEventConfig` in `types.rs` and update the routing logic in `orchestrator.rs`.
 
-### 9.4 Partial: Name Cache Has No LRU Eviction
+### 9.3 Partial: Name Cache Has No LRU Eviction
 
 **Severity: Very Low**
 
 The Scala version uses `LRUMap` with a 10,000 entry limit. Innkeeper uses a plain `HashMap` with no eviction. In practice, the cache only stores players seen in the current session and is cleared on reconnect, so this is unlikely to be an issue.
 
-### 9.5 Missing: `wow.locale` Config Key
+### 9.4 Missing: `wow.locale` Config Key
 
 **Severity: Very Low**
 
 The Scala config supports `wow.locale` (default "enUS") which is sent in the auth packet. Innkeeper hardcodes "enUS" in the realm handler. Since Ascension only supports English, this has no practical impact.
 
-### 9.6 Partial: `!who` Command Only Searches Guild Roster
+### 9.5 Partial: `!who` Command Only Searches Guild Roster
 
 **Severity: Low**
 

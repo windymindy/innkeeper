@@ -361,14 +361,24 @@ impl Bridge {
             return "No guildies online.".to_string();
         }
 
+        let enable_markdown = self.config.discord.enable_markdown;
         let count = members.len();
         let header = if let Some(name) = guild_name {
-            format!(
-                "**{}** - {} guildie{} online:",
-                name,
-                count,
-                if count == 1 { "" } else { "s" }
-            )
+            if enable_markdown {
+                format!(
+                    "**{}** - {} guildie{} online:",
+                    name,
+                    count,
+                    if count == 1 { "" } else { "s" }
+                )
+            } else {
+                format!(
+                    "{} - {} guildie{} online:",
+                    name,
+                    count,
+                    if count == 1 { "" } else { "s" }
+                )
+            }
         } else {
             format!(
                 "{} guildie{} online:",
@@ -382,10 +392,17 @@ impl Bridge {
         for m in members {
             let class_name = m.class.map(|c| c.name()).unwrap_or("Unknown");
             let zone_name = get_zone_name(m.zone_id);
-            lines.push(format!(
-                "• **{}** (Lvl {} {}) - {}",
-                m.name, m.level, class_name, zone_name
-            ));
+            if enable_markdown {
+                lines.push(format!(
+                    "• **{}** (Lvl {} {}) - {}",
+                    m.name, m.level, class_name, zone_name
+                ));
+            } else {
+                lines.push(format!(
+                    "• {} (Lvl {} {}) - {}",
+                    m.name, m.level, class_name, zone_name
+                ));
+            }
         }
 
         lines.join("\n")
@@ -397,6 +414,8 @@ impl Bridge {
         member: Option<&GuildMember>,
         guild_name: Option<&str>,
     ) -> String {
+        let enable_markdown = self.config.discord.enable_markdown;
+
         match member {
             Some(m) => {
                 let class_name = m.class.map(|c| c.name()).unwrap_or("Unknown");
@@ -404,16 +423,30 @@ impl Bridge {
                 let guild_str = guild_name.map(|g| format!(" <{}>", g)).unwrap_or_default();
 
                 if m.online {
-                    format!(
-                        "**{}**{} is a Level {} {} currently in {}.",
-                        m.name, guild_str, m.level, class_name, zone_name
-                    )
+                    if enable_markdown {
+                        format!(
+                            "**{}**{} is a Level {} {} currently in {}.",
+                            m.name, guild_str, m.level, class_name, zone_name
+                        )
+                    } else {
+                        format!(
+                            "{}{} is a Level {} {} currently in {}.",
+                            m.name, guild_str, m.level, class_name, zone_name
+                        )
+                    }
                 } else {
                     let last_seen = self.format_duration(m.last_logoff);
-                    format!(
-                        "**{}**{} is a Level {} {} currently offline. Last seen {} in {}.",
-                        m.name, guild_str, m.level, class_name, last_seen, zone_name
-                    )
+                    if enable_markdown {
+                        format!(
+                            "**{}**{} is a Level {} {} currently offline. Last seen {} in {}.",
+                            m.name, guild_str, m.level, class_name, last_seen, zone_name
+                        )
+                    } else {
+                        format!(
+                            "{}{} is a Level {} {} currently offline. Last seen {} in {}.",
+                            m.name, guild_str, m.level, class_name, last_seen, zone_name
+                        )
+                    }
                 }
             }
             None => format!("Player '{}' not found in.", player_name),

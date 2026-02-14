@@ -219,6 +219,9 @@ impl GameClient {
             SMSG_UPDATE_OBJECT => {
                 self.on_update_object(handler, connection, payload).await?;
             }
+            SMSG_INVALIDATE_PLAYER => {
+                handler.handle_invalidate_player(payload)?;
+            }
             _ => {
                 // Ignore unknown packets
             }
@@ -409,7 +412,7 @@ impl GameClient {
 
     fn on_guild_roster(&self, handler: &mut GameHandler, payload: Bytes) -> Result<()> {
         handler.handle_guild_roster(payload)?;
-        info!("Guild roster loaded: {} members", handler.guild_roster.len());
+        info!("Guild roster received: {} members", handler.guild_roster.len());
 
         // Send guild stats update
         let online_count = handler.get_online_guildies_count();

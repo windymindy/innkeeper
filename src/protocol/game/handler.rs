@@ -750,6 +750,22 @@ impl GameHandler {
         debug!("Reset sit flag (SMSG_INIT_WORLD_STATES)");
     }
 
+    /// Handle SMSG_INVALIDATE_PLAYER.
+    /// Removes the player from the name cache when the server signals they're no longer valid.
+    pub fn handle_invalidate_player(&mut self, payload: Bytes) -> Result<()> {
+        use crate::protocol::game::packets::InvalidatePlayer;
+        use crate::protocol::packets::PacketDecode;
+
+        let packet = InvalidatePlayer::decode(&mut payload.clone())?;
+        if self.player_names.remove(&packet.guid).is_some() {
+            debug!(
+                "Removed player {} from name cache (SMSG_INVALIDATE_PLAYER)",
+                packet.guid
+            );
+        }
+        Ok(())
+    }
+
     /// Build CMSG_GAMEOBJ_USE packet.
     pub fn build_gameobj_use(&self, guid: u64) -> GameObjUse {
         GameObjUse { guid }

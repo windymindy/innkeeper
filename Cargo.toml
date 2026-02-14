@@ -1,10 +1,9 @@
 [package]
 name = "innkeeper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Discord-WoW chat bridge for Ascension private server"
-authors = ["Innkeeper Contributors"]
-repository = "https://github.com/anomalyco/innkeeper"
+repository = "https://github.com/windymindy/innkeeper"
 
 [features]
 default = []
@@ -51,7 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 fancy-regex = "0.11"
 chrono = "0.4"
 
-# Optional: emoji handling
+# Emoji handling
 emojis = "0.6"
 
 [dev-dependencies]

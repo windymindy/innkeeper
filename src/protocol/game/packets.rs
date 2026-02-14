@@ -441,6 +441,30 @@ impl PacketDecode for InitWorldStates {
     }
 }
 
+/// SMSG_INVALIDATE_PLAYER packet.
+/// Sent by the server to signal that a player is no longer valid/visible.
+#[derive(Debug, Clone)]
+pub struct InvalidatePlayer {
+    pub guid: u64,
+}
+
+impl PacketDecode for InvalidatePlayer {
+    type Error = anyhow::Error;
+
+    fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
+        if buf.remaining() < 8 {
+            return Err(anyhow!(
+                "SMSG_INVALIDATE_PLAYER packet too short: need {} bytes, got {}",
+                8,
+                buf.remaining()
+            ));
+        }
+        Ok(InvalidatePlayer {
+            guid: buf.get_u64_le(),
+        })
+    }
+}
+
 /// CMSG_GAMEOBJ_USE packet.
 #[derive(Debug, Clone)]
 pub struct GameObjUse {
