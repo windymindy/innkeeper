@@ -27,7 +27,7 @@ use crate::protocol::game::packets::{
     InitWorldStates, KeepAlive, LoginVerifyWorld, Ping, PlayerLogin, Pong,
 };
 use crate::protocol::packets::PacketDecode;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bytes::Buf;
 
 /// Game protocol handler state.
@@ -782,6 +782,12 @@ impl GameHandler {
             return Ok(None);
         }
 
+        if payload.remaining() < 4 {
+            return Err(anyhow!(
+                "handle_update_object: need 4 bytes for block_count, have {}",
+                payload.remaining()
+            ));
+        }
         let block_count = payload.get_u32_le();
         let mut closest_chair_guid = None;
         let mut min_distance_sq = f32::MAX;
@@ -806,6 +812,11 @@ impl GameHandler {
                 2 | 3 => {
                     // UPDATETYPE_CREATE_OBJECT, UPDATETYPE_CREATE_OBJECT2
                     let guid = unpack_guid(&mut payload)?;
+                    if payload.remaining() < 1 {
+                        return Err(anyhow!(
+                            "handle_update_object: need 1 byte for obj_type, have 0"
+                        ));
+                    }
                     let obj_type = payload.get_u8();
                     let movement = self.parse_movement(&mut payload)?;
                     self.parse_update_fields(&mut payload)?;
@@ -844,6 +855,12 @@ impl GameHandler {
                 }
                 4 | 5 => {
                     // UPDATETYPE_OUT_OF_RANGE_OBJECTS, UPDATETYPE_NEAR_OBJECTS
+                    if payload.remaining() < 4 {
+                        return Err(anyhow!(
+                            "handle_update_object: need 4 bytes for OUT_OF_RANGE count, have {}",
+                            payload.remaining()
+                        ));
+                    }
                     let count = payload.get_u32_le();
                     for _ in 0..count {
                         unpack_guid(&mut payload)?;
@@ -868,6 +885,15 @@ impl GameHandler {
             return Ok(());
         }
         let count = buf.get_u8();
+        let mask_bytes = (count as usize) * 4;
+        if buf.remaining() < mask_bytes {
+            return Err(anyhow!(
+                "parse_update_fields: need {} bytes for {} field masks, have {}",
+                mask_bytes,
+                count,
+                buf.remaining()
+            ));
+        }
         let mut counts = Vec::with_capacity(count as usize);
         for _ in 0..count {
             counts.push(buf.get_u32_le());
@@ -875,8 +901,17 @@ impl GameHandler {
 
         for c in counts {
             // skip 4 bytes for each set bit
-            let set_bits = c.count_ones();
-            buf.advance((set_bits * 4) as usize);
+            let set_bits = c.count_ones() as usize;
+            let field_bytes = set_bits * 4;
+            if buf.remaining() < field_bytes {
+                return Err(anyhow!(
+                    "parse_update_fields: need {} bytes for {} field values, have {}",
+                    field_bytes,
+                    set_bits,
+                    buf.remaining()
+                ));
+            }
+            buf.advance(field_bytes);
         }
         Ok(())
     }
@@ -887,10 +922,23 @@ impl GameHandler {
         let mut y = 0.0;
         let mut z = 0.0;
 
+        if buf.remaining() < 2 {
+            return Err(anyhow!(
+                "parse_movement: need 2 bytes for flags, have {}",
+                buf.remaining()
+            ));
+        }
         let flags = buf.get_u16_le(); // readChar.reverseBytes = LE
 
         if (flags & 0x20) == 0x20 {
             // UPDATEFLAG_LIVING
+            // Base living block: flags2(4) + flags3(2) + time(4) + xyz(12) + orientation(4) = 26
+            if buf.remaining() < 26 {
+                return Err(anyhow!(
+                    "parse_movement: LIVING block needs 26 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             let flags2 = buf.get_u32_le(); // flags_
             let _flags3 = buf.get_u16_le(); // flags__ (readChar.reverseBytes)
             buf.advance(4); // time?
@@ -901,71 +949,176 @@ impl GameHandler {
             buf.advance(4); // o
 
             if (flags2 & 0x200) == 0x200 {
-                // MOVEMENTFLAG_ONTRANSPORT
+                // MOVEMENTFLAG_ONTRANSPORT: guid + pos(16) + time(4) + seat(1) = 21 + guid
                 unpack_guid(buf)?;
+                let transport_bytes = 4 * 4 + 4 + 1; // 21
+                if buf.remaining() < transport_bytes {
+                    return Err(anyhow!(
+                        "parse_movement: ONTRANSPORT needs {} bytes, have {}",
+                        transport_bytes,
+                        buf.remaining()
+                    ));
+                }
                 buf.advance(4 * 4);
                 buf.advance(4);
                 buf.advance(1);
                 if (_flags3 & 0x400) == 0x400 {
+                    if buf.remaining() < 4 {
+                        return Err(anyhow!(
+                            "parse_movement: ONTRANSPORT extra needs 4 bytes, have {}",
+                            buf.remaining()
+                        ));
+                    }
                     buf.advance(4);
                 }
             }
 
             if (flags2 & 0x200000) == 0x200000 // MOVEMENTFLAG_SWIMMING
                 || (flags2 & 0x2000000) == 0x2000000
-                // MOVEMENTFLAG_FLYING
-                || (_flags3 & 0x20) == 0x20
+                    // MOVEMENTFLAG_FLYING
+                    || (_flags3 & 0x20) == 0x20
             {
+                if buf.remaining() < 4 {
+                    return Err(anyhow!(
+                        "parse_movement: swim/fly pitch needs 4 bytes, have {}",
+                        buf.remaining()
+                    ));
+                }
                 buf.advance(4);
             }
 
+            // timestamp
+            if buf.remaining() < 4 {
+                return Err(anyhow!(
+                    "parse_movement: timestamp needs 4 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(4); // timestamp?
 
             if (flags2 & 0x1000) == 0x1000 {
-                // MOVEMENTFLAG_FALLING
+                // MOVEMENTFLAG_FALLING: 4 floats = 16 bytes
+                if buf.remaining() < 16 {
+                    return Err(anyhow!(
+                        "parse_movement: FALLING needs 16 bytes, have {}",
+                        buf.remaining()
+                    ));
+                }
                 buf.advance(4 * 4);
             }
 
             if (flags2 & 0x4000000) == 0x4000000 {
                 // MOVEMENTFLAG_SPLINE_ELEVATION
+                if buf.remaining() < 4 {
+                    return Err(anyhow!(
+                        "parse_movement: SPLINE_ELEVATION needs 4 bytes, have {}",
+                        buf.remaining()
+                    ));
+                }
                 buf.advance(4);
             }
 
+            // 9 speed floats = 36 bytes
+            if buf.remaining() < 36 {
+                return Err(anyhow!(
+                    "parse_movement: speeds need 36 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(9 * 4); // speeds
 
             if (flags2 & 0x8000000) == 0x8000000 {
                 // MOVEMENTFLAG_SPLINE_ENABLED
+                if buf.remaining() < 4 {
+                    return Err(anyhow!(
+                        "parse_movement: spline flags need 4 bytes, have {}",
+                        buf.remaining()
+                    ));
+                }
                 let flags_spline = buf.get_u32_le();
                 if (flags_spline & 0x20000) == 0x20000 {
+                    if buf.remaining() < 4 {
+                        return Err(anyhow!(
+                            "parse_movement: spline target needs 4 bytes, have {}",
+                            buf.remaining()
+                        ));
+                    }
                     buf.advance(4);
                 }
                 if (flags_spline & 0x10000) == 0x10000 {
+                    if buf.remaining() < 8 {
+                        return Err(anyhow!(
+                            "parse_movement: spline angle needs 8 bytes, have {}",
+                            buf.remaining()
+                        ));
+                    }
                     buf.advance(8);
                 }
                 if (flags_spline & 0x8000) == 0x8000 {
+                    if buf.remaining() < 12 {
+                        return Err(anyhow!(
+                            "parse_movement: spline facing needs 12 bytes, have {}",
+                            buf.remaining()
+                        ));
+                    }
                     buf.advance(3 * 4);
+                }
+                // duration(4) + time_passed(4) + id(4) + points header(8) = 32
+                if buf.remaining() < 32 {
+                    return Err(anyhow!(
+                        "parse_movement: spline base data needs 32 bytes, have {}",
+                        buf.remaining()
+                    ));
                 }
                 buf.advance(3 * 4);
                 buf.advance(2 * 4);
                 buf.advance(2 * 4);
                 let splines = buf.get_u32_le();
+                let spline_data = (splines as usize) * 12; // 3 floats per point
+                if buf.remaining() < spline_data {
+                    return Err(anyhow!(
+                        "parse_movement: {} spline points need {} bytes, have {}",
+                        splines,
+                        spline_data,
+                        buf.remaining()
+                    ));
+                }
                 for _ in 0..splines {
                     buf.advance(3 * 4);
+                }
+                // end_point: type(1) + xyz(12) = 13
+                if buf.remaining() < 13 {
+                    return Err(anyhow!(
+                        "parse_movement: spline end point needs 13 bytes, have {}",
+                        buf.remaining()
+                    ));
                 }
                 buf.advance(1);
                 buf.advance(3 * 4);
             }
         } else {
             if (flags & 0x100) == 0x100 {
-                // UPDATEFLAG_POSITION
+                // UPDATEFLAG_POSITION: guid + xyz(12) + extra(16) + unknown(4) = 32 + guid
                 unpack_guid(buf)?;
+                if buf.remaining() < 32 {
+                    return Err(anyhow!(
+                        "parse_movement: POSITION needs 32 bytes, have {}",
+                        buf.remaining()
+                    ));
+                }
                 x = buf.get_f32_le();
                 y = buf.get_f32_le();
                 z = buf.get_f32_le();
                 buf.advance(4 * 4);
                 buf.advance(4);
             } else if (flags & 0x40) == 0x40 {
-                // UPDATEFLAG_STATIONARY_POSITION
+                // UPDATEFLAG_STATIONARY_POSITION: xyz(12) + orientation(4) = 16
+                if buf.remaining() < 16 {
+                    return Err(anyhow!(
+                        "parse_movement: STATIONARY_POSITION needs 16 bytes, have {}",
+                        buf.remaining()
+                    ));
+                }
                 x = buf.get_f32_le();
                 y = buf.get_f32_le();
                 z = buf.get_f32_le();
@@ -975,10 +1128,22 @@ impl GameHandler {
 
         if (flags & 0x8) == 0x8 {
             // UPDATEFLAG_HIGHGUID
+            if buf.remaining() < 4 {
+                return Err(anyhow!(
+                    "parse_movement: HIGHGUID needs 4 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(4);
         }
         if (flags & 0x10) == 0x10 {
             // UPDATEFLAG_LOWGUID
+            if buf.remaining() < 4 {
+                return Err(anyhow!(
+                    "parse_movement: LOWGUID needs 4 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(4);
         }
         if (flags & 0x4) == 0x4 {
@@ -987,14 +1152,32 @@ impl GameHandler {
         }
         if (flags & 0x2) == 0x2 {
             // UPDATEFLAG_TRANSPORT
+            if buf.remaining() < 4 {
+                return Err(anyhow!(
+                    "parse_movement: TRANSPORT needs 4 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(4);
         }
         if (flags & 0x80) == 0x80 {
             // UPDATEFLAG_VEHICLE
+            if buf.remaining() < 8 {
+                return Err(anyhow!(
+                    "parse_movement: VEHICLE needs 8 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(2 * 4);
         }
         if (flags & 0x200) == 0x200 {
             // UPDATEFLAG_ROTATION
+            if buf.remaining() < 8 {
+                return Err(anyhow!(
+                    "parse_movement: ROTATION needs 8 bytes, have {}",
+                    buf.remaining()
+                ));
+            }
             buf.advance(8);
         }
 
@@ -1002,6 +1185,7 @@ impl GameHandler {
     }
 }
 
+#[derive(Debug)]
 struct Movement {
     flags: u16,
     x: f32,
@@ -1014,7 +1198,19 @@ fn close_to(x: f32, y: f32, precision: f32) -> bool {
 }
 
 fn unpack_guid(buf: &mut Bytes) -> Result<u64> {
+    if buf.remaining() < 1 {
+        return Err(anyhow!("unpack_guid: buffer empty, need mask byte"));
+    }
     let mask = buf.get_u8();
+    let needed = mask.count_ones() as usize;
+    if buf.remaining() < needed {
+        return Err(anyhow!(
+            "unpack_guid: need {} GUID bytes for mask {:#04x}, have {}",
+            needed,
+            mask,
+            buf.remaining()
+        ));
+    }
     let mut guid: u64 = 0;
 
     for i in 0..8 {

@@ -203,6 +203,16 @@ impl PacketDecode for CharEnum {
             }
             let guid = buf.get_u64_le();
             let name = read_cstring(buf, MAX_CSTRING_SHORT)?;
+
+            // 9 u8s + 5 u32s + 3 f32s + 1 u8 + 3 u32s = 9 + 20 + 12 + 1 + 12 = 53 bytes
+            // Plus 19 inventory slots × 5 bytes = 95 bytes → total 148 after name
+            if buf.remaining() < 148 {
+                return Err(anyhow!(
+                    "CharEnum entry too short: need 148 bytes after name, have {}",
+                    buf.remaining()
+                ));
+            }
+
             let race = buf.get_u8();
             let class = buf.get_u8();
             let gender = buf.get_u8();
@@ -226,9 +236,7 @@ impl PacketDecode for CharEnum {
 
             // Skip inventory (19 * (4 + 1))
             for _ in 0..19 {
-                if buf.remaining() >= 5 {
-                    buf.advance(5);
-                }
+                buf.advance(5);
             }
 
             characters.push(CharacterInfo {

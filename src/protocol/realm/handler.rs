@@ -377,10 +377,9 @@ impl RealmHandler {
 
     /// Handle REALM_LIST response and extract realm info.
     pub fn handle_realm_list_response(&self, data: &[u8]) -> Result<Vec<RealmInfo>> {
-        if data.len() < 7 {
+        if data.len() < 9 {
             return Err(anyhow!(
-                "Packet too short: need {} bytes, got {}",
-                7,
+                "Realm list packet too short: need 9 bytes for header, got {}",
                 data.len()
             ));
         }

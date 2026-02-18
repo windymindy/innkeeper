@@ -53,7 +53,6 @@ async fn main() -> Result<()> {
     info!("  Character: {}", config.wow.character);
     info!("  Realm: {}", config.wow.realm);
     info!("  Realmlist: {}", config.wow.realmlist);
-    info!("  Platform: {}", config.wow.platform);
 
     // Extract realm host and port from realmlist
     let (realm_host, realm_port) = config.get_realm_host_port();

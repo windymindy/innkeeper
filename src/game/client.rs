@@ -543,10 +543,16 @@ impl GameClient {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        if let Ok(Some(guid)) = handler.handle_update_object(payload, self.config.quirks.sit) {
-            info!("Found a chair! Sitting on it...");
-            let interact = handler.build_gameobj_use(guid);
-            connection.send(interact.into()).await?;
+        match handler.handle_update_object(payload, self.config.quirks.sit) {
+            Ok(Some(guid)) => {
+                info!("Found a chair! Sitting on it...");
+                let interact = handler.build_gameobj_use(guid);
+                connection.send(interact.into()).await?;
+            }
+            Err(e) => {
+                warn!("Failed to parse SMSG_UPDATE_OBJECT: {}", e);
+            }
+            _ => {}
         }
         Ok(())
     }
