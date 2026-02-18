@@ -1,6 +1,6 @@
 //! Game server packet definitions.
 
-use crate::protocol::packets::{PacketDecode, PacketEncode};
+use crate::protocol::packets::{read_cstring, PacketDecode, PacketEncode, MAX_CSTRING_SHORT};
 use anyhow::{anyhow, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
@@ -202,7 +202,7 @@ impl PacketDecode for CharEnum {
                 break;
             }
             let guid = buf.get_u64_le();
-            let name = read_cstring(buf)?;
+            let name = read_cstring(buf, MAX_CSTRING_SHORT)?;
             let race = buf.get_u8();
             let class = buf.get_u8();
             let gender = buf.get_u8();
@@ -259,18 +259,6 @@ impl PacketDecode for CharEnum {
 
         Ok(CharEnum { characters })
     }
-}
-
-fn read_cstring(buf: &mut Bytes) -> Result<String> {
-    let mut bytes = Vec::new();
-    while buf.remaining() > 0 {
-        let b = buf.get_u8();
-        if b == 0 {
-            break;
-        }
-        bytes.push(b);
-    }
-    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 /// CMSG_PLAYER_LOGIN packet.

@@ -5,7 +5,9 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::common::types::{ChatMessage, ChatType, Guid};
-use crate::protocol::packets::{PacketDecode, PacketEncode};
+use crate::protocol::packets::{
+    read_cstring, PacketDecode, PacketEncode, MAX_CSTRING_LONG, MAX_CSTRING_SHORT,
+};
 use anyhow::{anyhow, Result};
 
 /// Chat events (message types) from WoW protocol.
@@ -230,12 +232,12 @@ impl MessageChat {
                 buf.advance(4);
             }
             // Skip GM prefix string
-            read_cstring(buf)?;
+            read_cstring(buf, MAX_CSTRING_SHORT)?;
         }
 
         // For channel messages, read channel name
         let channel_name = if chat_type == chat_events::CHAT_MSG_CHANNEL {
-            Some(read_cstring(buf)?)
+            Some(read_cstring(buf, MAX_CSTRING_SHORT)?)
         } else {
             None
         };
@@ -460,7 +462,7 @@ impl PacketDecode for ChannelNotify {
         }
 
         let notify_type = buf.get_u8();
-        let channel_name = read_cstring(buf)?;
+        let channel_name = read_cstring(buf, MAX_CSTRING_SHORT)?;
 
         Ok(ChannelNotify {
             notify_type,
@@ -523,8 +525,8 @@ impl PacketDecode for NameQueryResponse {
 
         let (name, realm_name, race, gender, class) = if name_known == 0 {
             // Name is known - read full data
-            let name = read_cstring(buf)?;
-            let realm_name = read_cstring(buf)?;
+            let name = read_cstring(buf, MAX_CSTRING_SHORT)?;
+            let realm_name = read_cstring(buf, MAX_CSTRING_SHORT)?;
 
             // WotLK sends 1-byte values for race, gender, class (not 4-byte!)
             if buf.remaining() < 3 {
@@ -554,19 +556,6 @@ impl PacketDecode for NameQueryResponse {
             class,
         })
     }
-}
-
-/// Helper function to read a null-terminated C string from the buffer.
-fn read_cstring(buf: &mut Bytes) -> Result<String> {
-    let mut bytes = Vec::new();
-    while buf.remaining() > 0 {
-        let b = buf.get_u8();
-        if b == 0 {
-            break;
-        }
-        bytes.push(b);
-    }
-    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 /// Helper function to read a packed GUID (variable length, 1-9 bytes).
@@ -635,7 +624,7 @@ impl PacketDecode for ServerNotification {
     type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
-        let message = read_cstring(buf)?;
+        let message = read_cstring(buf, MAX_CSTRING_LONG)?;
         Ok(ServerNotification { message })
     }
 }
@@ -656,7 +645,7 @@ impl PacketDecode for ChatPlayerNotFound {
     type Error = anyhow::Error;
 
     fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
-        let player_name = read_cstring(buf)?;
+        let player_name = read_cstring(buf, MAX_CSTRING_SHORT)?;
         Ok(ChatPlayerNotFound { player_name })
     }
 }
@@ -684,7 +673,7 @@ impl PacketDecode for ServerMotd {
         let mut lines = Vec::with_capacity(line_count);
 
         for _ in 0..line_count {
-            lines.push(read_cstring(buf)?);
+            lines.push(read_cstring(buf, MAX_CSTRING_LONG)?);
         }
 
         Ok(ServerMotd { lines })
@@ -746,7 +735,7 @@ impl PacketDecode for ServerMessage {
         }
 
         let message_type = buf.get_u32_le();
-        let text = read_cstring(buf)?;
+        let text = read_cstring(buf, MAX_CSTRING_LONG)?;
 
         Ok(ServerMessage { message_type, text })
     }

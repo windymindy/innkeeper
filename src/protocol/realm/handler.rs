@@ -10,6 +10,7 @@ use sha2::Sha256;
 use tracing::debug;
 use x25519_dalek::{PublicKey, StaticSecret};
 
+use crate::protocol::packets::{read_cstring, MAX_CSTRING_SHORT};
 use crate::protocol::realm::packets::{AuthResult, RealmInfo};
 use anyhow::{anyhow, Result};
 
@@ -413,10 +414,10 @@ impl RealmHandler {
             let flags = buf.get_u8();
 
             // Read null-terminated name
-            let name = Self::read_cstring(&mut buf)?;
+            let name = read_cstring(&mut buf, MAX_CSTRING_SHORT)?;
 
             // Read null-terminated address
-            let address = Self::read_cstring(&mut buf)?;
+            let address = read_cstring(&mut buf, MAX_CSTRING_SHORT)?;
 
             if buf.remaining() < 7 {
                 break;
@@ -450,22 +451,6 @@ impl RealmHandler {
         }
 
         Ok(realms)
-    }
-
-    /// Read a null-terminated string from buffer.
-    fn read_cstring(buf: &mut &[u8]) -> Result<String> {
-        let mut bytes = Vec::new();
-        loop {
-            if buf.is_empty() {
-                return Err(anyhow!("Unterminated string"));
-            }
-            let b = buf.get_u8();
-            if b == 0 {
-                break;
-            }
-            bytes.push(b);
-        }
-        Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 }
 

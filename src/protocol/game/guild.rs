@@ -5,7 +5,9 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::common::types::{Guid, GuildEvent, GuildMember};
-use crate::protocol::packets::{PacketDecode, PacketEncode};
+use crate::protocol::packets::{
+    read_cstring, PacketDecode, PacketEncode, MAX_CSTRING_LONG, MAX_CSTRING_SHORT,
+};
 use anyhow::{anyhow, Result};
 
 /// Guild event IDs from the protocol.
@@ -48,12 +50,12 @@ impl PacketDecode for GuildQueryResponse {
         }
 
         let guild_id = buf.get_u32_le();
-        let name = read_cstring(buf)?;
+        let name = read_cstring(buf, MAX_CSTRING_SHORT)?;
 
         // Read up to 10 rank names
         let mut ranks = Vec::with_capacity(10);
         for _ in 0..10 {
-            let rank_name = read_cstring(buf)?;
+            let rank_name = read_cstring(buf, MAX_CSTRING_SHORT)?;
             if !rank_name.is_empty() {
                 ranks.push(rank_name);
             }
@@ -198,8 +200,8 @@ impl PacketDecode for GuildRoster {
         }
 
         let member_count = buf.get_u32_le();
-        let motd = read_cstring(buf)?;
-        let guild_info = read_cstring(buf)?;
+        let motd = read_cstring(buf, MAX_CSTRING_LONG)?;
+        let guild_info = read_cstring(buf, MAX_CSTRING_LONG)?;
 
         if buf.remaining() < 4 {
             return Err(anyhow!(
@@ -239,7 +241,7 @@ impl PacketDecode for GuildRoster {
                     buf.remaining()
                 ));
             }
-            let name = read_cstring(buf)?;
+            let name = read_cstring(buf, MAX_CSTRING_SHORT)?;
 
             // Skip guild rank (4 bytes) - not stored
             if buf.remaining() < 11 {
@@ -270,9 +272,9 @@ impl PacketDecode for GuildRoster {
             };
 
             // Public note
-            let public_note = read_cstring(buf)?;
+            let public_note = read_cstring(buf, MAX_CSTRING_SHORT)?;
             // Officer note
-            let officer_note = read_cstring(buf)?;
+            let officer_note = read_cstring(buf, MAX_CSTRING_SHORT)?;
 
             members.push(GuildRosterMember {
                 guid,
@@ -361,7 +363,7 @@ impl PacketDecode for GuildEventPacket {
 
         let mut strings = Vec::with_capacity(num_strings as usize);
         for _ in 0..num_strings {
-            strings.push(read_cstring(buf)?);
+            strings.push(read_cstring(buf, MAX_CSTRING_SHORT)?);
         }
 
         Ok(GuildEventPacket {
@@ -369,19 +371,6 @@ impl PacketDecode for GuildEventPacket {
             strings,
         })
     }
-}
-
-/// Helper function to read a null-terminated C string from the buffer.
-fn read_cstring(buf: &mut Bytes) -> Result<String> {
-    let mut bytes = Vec::new();
-    while buf.remaining() > 0 {
-        let b = buf.get_u8();
-        if b == 0 {
-            break;
-        }
-        bytes.push(b);
-    }
-    Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
 #[cfg(test)]
