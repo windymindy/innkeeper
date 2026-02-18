@@ -86,6 +86,8 @@ impl GameClient {
 
         info!("Game connection established");
 
+        let mut logout_timeout: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
+
         loop {
             tokio::select! {
                 packet = connection.next() => {
@@ -111,12 +113,20 @@ impl GameClient {
                     }
                 }
 
-                // Shutdown signal received - initiate graceful logout
+                // Shutdown signal received - send logout request, start timer
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         self.handle_shutdown(&mut handler, &mut connection).await?;
-                        return Ok(());
+                        logout_timeout = Some(Box::pin(tokio::time::sleep(
+                            tokio::time::Duration::from_secs(20),
+                        )));
                     }
+                }
+
+                _ = async { logout_timeout.as_mut().unwrap().as_mut().await },
+                    if logout_timeout.is_some() => {
+                    warn!("Logout timed out after 20s - closing connection");
+                    return Ok(());
                 }
 
                 // Ping keepalive every 30 seconds
@@ -575,9 +585,8 @@ impl GameClient {
             if let Err(e) = connection.send(logout_req.into()).await {
                 warn!("Failed to send logout request: {}", e);
             }
-            // Wait briefly for logout complete or timeout
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            info!("Logout timeout or complete - closing connection");
+            // Caller sets a logout timeout.
+            // The main select! loop will either receive SMSG_LOGOUT_COMPLETE or time out.
         }
         Ok(())
     }

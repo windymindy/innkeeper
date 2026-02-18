@@ -139,9 +139,7 @@ async fn main() -> Result<()> {
     };
 
     if !discord_init_success {
-        error!("Failed to initialize Discord client - shutting down");
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        std::process::exit(1);
+        return Err(anyhow::anyhow!("Failed to initialize Discord client"));
     }
 
     // Game client task
@@ -166,7 +164,6 @@ async fn main() -> Result<()> {
         }
 
         let mut backoff = game_backoff();
-        let mut connected = false;
 
         // Clone receivers for continuous reading
         let mut outgoing_rx = game_channels.outgoing_wow_rx;
@@ -180,13 +177,7 @@ async fn main() -> Result<()> {
                 break;
             }
 
-            if connected {
-                // This shouldn't happen - connected state is handled inside the block below
-                connected = false;
-                continue;
-            }
-
-            // Not connected - try to authenticate
+            // Try to authenticate
             info!("Authenticating with realm server...");
             if let Err(e) = game_channels.status_tx.send(common::messages::ActivityStatus::Connecting) {
                 debug!("Failed to send status: {}", e);
@@ -202,7 +193,6 @@ async fn main() -> Result<()> {
                 Ok(session) => {
                     info!("Realm authentication successful!");
                     backoff = game_backoff();
-                    connected = true;
 
                     // Create game client and run
                     let mut game_client = GameClient::new(
@@ -228,7 +218,6 @@ async fn main() -> Result<()> {
                     // After disconnect, extract receivers back
                     outgoing_rx = game_client.channels.outgoing_wow_rx;
                     command_rx = game_client.channels.command_rx;
-                    connected = false;
                 }
                 Err(e) => {
                     error!("Realm authentication failed: {}", e);
@@ -309,11 +298,11 @@ async fn main() -> Result<()> {
         if let Err(e) = shutdown_tx.send(true) {
             debug!("Failed to send shutdown: {}", e);
         }
-        let timeout = tokio::time::Duration::from_secs(5);
+        let timeout = tokio::time::Duration::from_secs(30);
         match tokio::time::timeout(timeout, game_task).await {
             Ok(Ok(())) => info!("Game client logged out gracefully"),
             Ok(Err(e)) => warn!("Game client task panicked: {}", e),
-            Err(_) => warn!("Game client logout timed out"),
+            Err(_) => warn!("Game client logout timed out 30s"),
         }
     }
 
