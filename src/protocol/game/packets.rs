@@ -484,3 +484,54 @@ impl From<GameObjUse> for crate::protocol::packets::Packet {
         )
     }
 }
+
+/// SMSG_TIME_SYNC_REQ packet.
+/// The server periodically sends this to synchronize time with the client.
+#[derive(Debug, Clone)]
+pub struct TimeSyncReq {
+    pub counter: u32,
+}
+
+impl PacketDecode for TimeSyncReq {
+    type Error = anyhow::Error;
+
+    fn decode(buf: &mut Bytes) -> Result<Self, Self::Error> {
+        if buf.remaining() < 4 {
+            return Err(anyhow!(
+                "SMSG_TIME_SYNC_REQ packet too short: need {} bytes, got {}",
+                4,
+                buf.remaining()
+            ));
+        }
+        Ok(TimeSyncReq {
+            counter: buf.get_u32_le(),
+        })
+    }
+}
+
+/// CMSG_TIME_SYNC_RESP packet.
+/// Client response to SMSG_TIME_SYNC_REQ with the sync counter and client uptime.
+#[derive(Debug, Clone)]
+pub struct TimeSyncResp {
+    pub counter: u32,
+    pub client_ticks: u32,
+}
+
+impl PacketEncode for TimeSyncResp {
+    fn encode(&self, buf: &mut BytesMut) {
+        buf.put_u32_le(self.counter);
+        buf.put_u32_le(self.client_ticks);
+    }
+}
+
+impl From<TimeSyncResp> for crate::protocol::packets::Packet {
+    fn from(resp: TimeSyncResp) -> Self {
+        use bytes::BytesMut;
+        let mut buf = BytesMut::new();
+        resp.encode(&mut buf);
+        crate::protocol::packets::Packet::new(
+            crate::protocol::packets::opcodes::CMSG_TIME_SYNC_RESP,
+            buf.freeze(),
+        )
+    }
+}

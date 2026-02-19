@@ -12,7 +12,7 @@ use crate::common::{ActivityStatus, BridgeCommand, BridgeMessage, CommandRespons
 use crate::config::types::Config;
 use crate::discord::commands::CommandResponse;
 
-use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, InitWorldStates, LoginVerifyWorld, Pong};
+use crate::protocol::game::packets::{AuthChallenge, AuthResponse, CharEnum, InitWorldStates, LoginVerifyWorld, Pong, TimeSyncReq};
 use crate::protocol::game::{new_game_connection, ChatProcessingResult, GameConnection, GameHandler};
 use crate::protocol::packets::opcodes::*;
 use crate::protocol::packets::PacketDecode;
@@ -218,6 +218,11 @@ impl GameClient {
             SMSG_PONG => {
                 let pong = Pong::decode(&mut payload)?;
                 handler.handle_pong(pong);
+            }
+            SMSG_TIME_SYNC_REQ => {
+                let req = TimeSyncReq::decode(&mut payload)?;
+                let resp = handler.handle_time_sync_req(req);
+                connection.send(resp.into()).await?;
             }
             SMSG_LOGOUT_COMPLETE => {
                 info!("Logout complete - character logged out gracefully");

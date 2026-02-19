@@ -710,8 +710,9 @@ impl MessageRouter {
             .unwrap_or_default()
     }
 
-    /// Get custom channel names that need to be joined.
+    /// Get unique custom channel names that need to be joined.
     pub fn get_channels_to_join(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
         self.routes
             .iter()
             .filter_map(|r| {
@@ -721,6 +722,7 @@ impl MessageRouter {
                     None
                 }
             })
+            .filter(|name| seen.insert(name.to_lowercase()))
             .collect()
     }
 }

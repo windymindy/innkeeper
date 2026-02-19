@@ -94,7 +94,6 @@ pub mod languages {
 }
 
 /// Pre-defined channel IDs for standard WoW channels.
-#[allow(dead_code)]
 pub mod channel_ids {
     pub const GENERAL: u32 = 0x01;
     pub const TRADE: u32 = 0x02;
@@ -102,6 +101,28 @@ pub mod channel_ids {
     pub const WORLD_DEFENSE: u32 = 0x17;
     pub const GUILD_RECRUITMENT: u32 = 0x19; // TBC/WotLK
     pub const LOOKING_FOR_GROUP: u32 = 0x1A;
+
+    /// Resolve a channel name to its predefined ID.
+    /// Takes everything before the first space and matches case-insensitively,
+    /// so "Trade - City" resolves to TRADE (0x02). Truly custom channels return 0.
+    pub fn get_channel_id(channel_name: &str) -> u32 {
+        let prefix = channel_name
+            .split_once(' ')
+            .map(|(p, _)| p)
+            .unwrap_or(channel_name);
+
+        match prefix.to_lowercase().as_str() {
+            "ascension" => GENERAL,
+            "general" => GENERAL,
+            "newcomers" => TRADE,
+            "trade" => TRADE,
+            "localdefense" => LOCAL_DEFENSE,
+            "worlddefense" => WORLD_DEFENSE,
+            "guildrecruitment" => GUILD_RECRUITMENT,
+            "lookingforgroup" => LOOKING_FOR_GROUP,
+            _ => 0x00,
+        }
+    }
 }
 
 /// SMSG_MESSAGECHAT packet data.
@@ -345,43 +366,27 @@ impl From<SendChatMessage> for crate::protocol::packets::Packet {
     }
 }
 
-/// CMSG_JOIN_CHANNEL packet.
-#[derive(Debug, Clone)]
-pub struct JoinChannel {
-    pub channel_id: u32,
-    pub has_voice: u8,
-    pub channel_name: String,
-    pub password: String,
-}
-
-impl PacketEncode for JoinChannel {
-    fn encode(&self, buf: &mut BytesMut) {
-        buf.put_u32_le(self.channel_id);
-        buf.put_u8(self.has_voice);
-        buf.put_u8(0); // unknown byte
-
-        // Channel name (null-terminated)
-        buf.put_slice(self.channel_name.as_bytes());
-        buf.put_u8(0);
-
-        // Password (null-terminated, can be empty)
-        buf.put_slice(self.password.as_bytes());
-        buf.put_u8(0);
-    }
-}
-
-/// WotLK-specific JoinChannel (simpler format).
+/// CMSG_JOIN_CHANNEL packet (TBC/WotLK format).
+///
+/// Packet layout: [channel_id: u32le] [has_voice: u8] [unk: u8] [name: cstring] [password: cstring]
 #[derive(Debug, Clone)]
 pub struct JoinChannelWotLK {
+    pub channel_id: u32,
     pub channel_name: String,
 }
 
 impl PacketEncode for JoinChannelWotLK {
     fn encode(&self, buf: &mut BytesMut) {
-        // WotLK format from Scala: just channel name + null + another null
+        buf.put_u32_le(self.channel_id);
+        buf.put_u8(0); // has_voice = false
+        buf.put_u8(1); // unknown flag (always 1 in original)
+
+        // Channel name (null-terminated)
         buf.put_slice(self.channel_name.as_bytes());
-        buf.put_u8(0); // null terminator
-        buf.put_u8(0); // password (empty)
+        buf.put_u8(0);
+
+        // Password (null-terminated, empty)
+        buf.put_u8(0);
     }
 }
 
@@ -426,10 +431,15 @@ impl ChannelNotify {
             chat_notify::CHAT_BANNED_NOTICE => {
                 format!("[{}] You are banned from that channel", self.channel_name)
             }
+            chat_notify::CHAT_PLAYER_ALREADY_MEMBER_NOTICE => {
+                format!("[{}] already joined!", self.channel_name)
+            }
             chat_notify::CHAT_WRONG_FACTION_NOTICE => {
                 format!("Wrong faction for channel: {}", self.channel_name)
             }
-            chat_notify::CHAT_INVALID_NAME_NOTICE => "Invalid channel name".to_string(),
+            chat_notify::CHAT_INVALID_NAME_NOTICE => {
+                format!("Invalid channel name: {}", self.channel_name)
+            }
             chat_notify::CHAT_THROTTLED_NOTICE => {
                 format!("[{}] Message rate limited, please wait", self.channel_name)
             }
@@ -764,13 +774,14 @@ mod tests {
     #[test]
     fn test_join_channel_wotlk_encode() {
         let join = JoinChannelWotLK {
+            channel_id: 0,
             channel_name: "World".to_string(),
         };
 
         let mut buf = BytesMut::new();
         join.encode(&mut buf);
 
-        // 5 bytes "World" + 1 null + 1 null = 7
-        assert_eq!(buf.len(), 7);
+        // 4 bytes channel_id + 1 has_voice + 1 unknown + 5 bytes "World" + 1 null + 1 null = 13
+        assert_eq!(buf.len(), 13);
     }
 }

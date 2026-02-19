@@ -24,7 +24,8 @@ use crate::protocol::game::guild::{
 };
 use crate::protocol::game::packets::{
     AuthChallenge, AuthResponse, AuthSession, CharEnum, CharEnumRequest, CharacterInfo, GameObjUse,
-    InitWorldStates, KeepAlive, LoginVerifyWorld, Ping, PlayerLogin, Pong,
+    InitWorldStates, KeepAlive, LoginVerifyWorld, Ping, PlayerLogin, Pong, TimeSyncReq,
+    TimeSyncResp,
 };
 use crate::protocol::packets::PacketDecode;
 use anyhow::{anyhow, Result};
@@ -68,6 +69,8 @@ pub struct GameHandler {
     pub tried_to_sit: bool,
     /// Last known world position (x, y, z)
     pub world_position: Option<(f32, f32, f32)>,
+    /// Timestamp when the handler was created (for SMSG_TIME_SYNC_REQ uptime calculation)
+    connect_time: std::time::Instant,
 }
 
 impl GameHandler {
@@ -92,6 +95,7 @@ impl GameHandler {
             pending_message_order: VecDeque::new(),
             tried_to_sit: false,
             world_position: None,
+            connect_time: std::time::Instant::now(),
         }
     }
 
@@ -197,6 +201,23 @@ impl GameHandler {
     /// Handle SMSG_PONG (optional, usually just logged).
     pub fn handle_pong(&self, packet: Pong) {
         debug!("Received PONG with sequence: {}", packet.sequence);
+    }
+
+    /// Handle SMSG_TIME_SYNC_REQ and build CMSG_TIME_SYNC_RESP.
+    ///
+    /// The server periodically sends this to synchronize time. We respond
+    /// with the sync counter from the request and our uptime in milliseconds,
+    /// matching the original Scala implementation.
+    pub fn handle_time_sync_req(&self, packet: TimeSyncReq) -> TimeSyncResp {
+        let uptime = self.connect_time.elapsed().as_millis() as u32;
+        debug!(
+            "Time sync request: counter={}, responding with uptime={}ms",
+            packet.counter, uptime
+        );
+        TimeSyncResp {
+            counter: packet.counter,
+            client_ticks: uptime,
+        }
     }
 
     /// Build CMSG_PLAYER_LOGIN.
@@ -354,7 +375,9 @@ impl GameHandler {
 
     /// Build CMSG_JOIN_CHANNEL packet.
     pub fn build_join_channel(&self, channel_name: &str) -> JoinChannelWotLK {
+        use super::chat::channel_ids;
         JoinChannelWotLK {
+            channel_id: channel_ids::get_channel_id(channel_name),
             channel_name: channel_name.to_string(),
         }
     }
