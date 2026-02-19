@@ -7,7 +7,7 @@ use serenity::model::id::ChannelId;
 use tokio::sync::mpsc;
 
 use crate::common::BridgeMessage;
-use crate::config::types::GuildDashboardConfig;
+use crate::config::types::{Direction, GuildDashboardConfig};
 use crate::discord::commands::WowCommand;
 use crate::discord::resolver::MessageResolver;
 
@@ -27,7 +27,7 @@ pub struct ChannelConfig {
 #[derive(Debug)]
 pub struct PendingBridgeState {
     /// Channel configs waiting for resolution: (channel_name, direction, config)
-    pub pending_channel_configs: Vec<(String, String, ChannelConfig)>,
+    pub pending_channel_configs: Vec<(String, Direction, ChannelConfig)>,
     /// Sender for messages going to WoW.
     pub wow_tx: mpsc::UnboundedSender<BridgeMessage>,
     /// Sender for commands going to WoW handler.
@@ -49,7 +49,7 @@ pub struct PendingBridgeState {
 impl PendingBridgeState {
     /// Create a new pending state.
     pub fn new(
-        pending_channel_configs: Vec<(String, String, ChannelConfig)>,
+        pending_channel_configs: Vec<(String, Direction, ChannelConfig)>,
         wow_tx: mpsc::UnboundedSender<BridgeMessage>,
         command_tx: mpsc::UnboundedSender<WowCommand>,
         enable_dot_commands: bool,
@@ -83,7 +83,7 @@ impl PendingBridgeState {
         let mut wow_to_discord: HashMap<(u8, Option<String>), Vec<ChannelConfig>> = HashMap::new();
         let mut discord_to_wow: HashMap<ChannelId, ChannelConfig> = HashMap::new();
         let mut resolved_channels: HashSet<ChannelId> = HashSet::new();
-        let mut unresolved: Vec<(String, String, ChannelConfig)> = Vec::new();
+        let mut unresolved: Vec<(String, Direction, ChannelConfig)> = Vec::new();
 
         for (channel_name, direction, mut config) in self.pending_channel_configs {
             // Find matching Discord channel by name OR ID
@@ -108,7 +108,7 @@ impl PendingBridgeState {
                 wow_to_discord.entry(key).or_default().push(config.clone());
 
                 // Add to discord_to_wow mapping if bidirectional
-                if direction == "both" || direction == "discord_to_wow" {
+                if direction.allows_discord_to_wow() {
                     discord_to_wow.insert(discord_channel.id, config.clone());
                 }
 

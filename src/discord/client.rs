@@ -22,7 +22,7 @@ use crate::bridge::{Bridge, ChannelConfig, PendingBridgeState};
 use crate::bridge::orchestrator::parse_channel_config;
 use crate::common::{ActivityStatus, BridgeMessage};
 use crate::common::messages::DashboardEvent;
-use crate::config::types::{Config, GuildDashboardConfig};
+use crate::config::types::{Config, Direction, GuildDashboardConfig};
 use crate::discord::commands::{CommandResponse, WowCommand};
 use crate::discord::handler::{BridgeHandler, TaskChannels};
 
@@ -119,7 +119,7 @@ impl DiscordBotBuilder {
     /// Build the Discord bot.
     pub async fn build(self, init_complete_tx: oneshot::Sender<()>) -> anyhow::Result<DiscordBot> {
         // Build pending channel configs from config
-        let mut pending_configs: Vec<(String, String, ChannelConfig)> = Vec::new();
+        let mut pending_configs: Vec<(String, Direction, ChannelConfig)> = Vec::new();
 
         for channel in &self.config.chat.channels {
             let (chat_type, wow_channel_name) = parse_channel_config(&channel.wow);
@@ -134,7 +134,7 @@ impl DiscordBotBuilder {
 
             pending_configs.push((
                 channel.discord.channel.clone(),
-                channel.direction.clone(),
+                channel.direction,
                 channel_config,
             ));
         }

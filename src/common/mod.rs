@@ -14,5 +14,3 @@ pub use messages::ActivityStatus;
 
 // Re-export achievement functions from resources
 pub use resources::{get_achievement_name, get_achievements};
-
-pub use crate::bridge::GameChannels;

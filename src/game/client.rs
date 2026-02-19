@@ -7,7 +7,8 @@ use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
 use crate::common::messages::{DashboardEvent, GuildDashboardData};
-use crate::common::{ActivityStatus, BridgeCommand, BridgeMessage, CommandResponseData, GameChannels};
+use crate::bridge::GameChannels;
+use crate::common::{ActivityStatus, BridgeCommand, BridgeMessage, CommandResponseData};
 use crate::config::types::Config;
 use crate::discord::commands::CommandResponse;
 
@@ -705,39 +706,11 @@ impl GameClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{
-        ChatConfig, DiscordConfig, GuildDashboardConfig, GuildEventsConfig, QuirksConfig, WowConfig,
-    };
+    use crate::config::types::Config;
     use crate::protocol::realm::packets::RealmInfo;
 
     fn make_test_config() -> Config {
-        Config {
-            discord: DiscordConfig {
-                token: "test".to_string(),
-                enable_dot_commands: false,
-                dot_commands_whitelist: None,
-                enable_commands_channels: None,
-                enable_tag_failed_notifications: false,
-                enable_markdown: false,
-            },
-            wow: WowConfig {
-                platform: "Mac".to_string(),
-                enable_server_motd: false,
-                version: "3.3.5".to_string(),
-                realm_build: None,
-                game_build: None,
-                realmlist: "localhost:3724".to_string(),
-                realm: "Test".to_string(),
-                account: "test".to_string(),
-                password: "test".to_string(),
-                character: "TestChar".to_string(),
-            },
-            guild: GuildEventsConfig::default(),
-            chat: ChatConfig::default(),
-            filters: None,
-            guild_dashboard: GuildDashboardConfig::default(),
-            quirks: QuirksConfig::default(),
-        }
+        Config::default()
     }
 
     fn make_test_session() -> RealmSession {

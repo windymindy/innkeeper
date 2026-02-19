@@ -11,7 +11,9 @@ use tracing::{debug, info};
 use crate::common::resources::get_zone_name;
 use crate::common::types::{ChatType, GuildMember};
 use crate::common::{BridgeMessage, CommandResponseData, DiscordMessage};
-use crate::config::types::{ChannelMapping, ChatConfig, Config, FiltersConfig, WowChannelConfig};
+use crate::config::types::{
+    ChannelMapping, ChatConfig, Config, Direction, FiltersConfig, WowChannelConfig,
+};
 use crate::discord::resolver::MessageResolver;
 use crate::game::formatter::{
     split_message, FormatContext, MessageFormatter, DEFAULT_DISCORD_TO_WOW_FORMAT,
@@ -552,39 +554,6 @@ fn build_per_channel_filters(channels: &[ChannelMapping]) -> HashMap<String, Mes
     filters
 }
 
-/// Direction of message flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction {
-    /// WoW to Discord only.
-    WowToDiscord,
-    /// Discord to WoW only.
-    DiscordToWow,
-    /// Bidirectional.
-    Both,
-}
-
-impl Direction {
-    /// Parse direction from config string.
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "wow_to_discord" => Direction::WowToDiscord,
-            "discord_to_wow" => Direction::DiscordToWow,
-            "both" => Direction::Both,
-            _ => Direction::Both,
-        }
-    }
-
-    /// Check if this direction allows WoW -> Discord messages.
-    pub fn allows_wow_to_discord(&self) -> bool {
-        matches!(self, Direction::WowToDiscord | Direction::Both)
-    }
-
-    /// Check if this direction allows Discord -> WoW messages.
-    pub fn allows_discord_to_wow(&self) -> bool {
-        matches!(self, Direction::DiscordToWow | Direction::Both)
-    }
-}
-
 /// Parse a ChatType from WowChannelConfig, matching Scala's parse() function.
 /// Corresponds to GamePackets.ChatEvents.parse() in the Scala code.
 pub fn parse_channel_config(config: &WowChannelConfig) -> (ChatType, Option<String>) {
@@ -664,7 +633,7 @@ impl MessageRouter {
                 chat_type,
                 wow_channel_name: wow_channel_name.clone(),
                 discord_channel_name: mapping.discord.channel.clone(),
-                direction: Direction::from_str(&mapping.direction),
+                direction: mapping.direction,
                 // discord.format is used for messages going TO Discord (WoW → Discord)
                 wow_to_discord_format: mapping
                     .discord
@@ -763,8 +732,7 @@ pub type SharedRouter = Arc<MessageRouter>;
 mod tests {
     use super::*;
     use crate::config::types::{
-        ChannelMapping, ChatConfig, DiscordChannelConfig, DiscordConfig, GuildDashboardConfig,
-        GuildEventsConfig, QuirksConfig, WowChannelConfig, WowConfig,
+        ChannelMapping, ChatConfig, Direction, DiscordChannelConfig, WowChannelConfig,
     };
     use crate::protocol::game::chat::chat_events;
 
@@ -774,30 +742,9 @@ mod tests {
 
     fn make_test_config() -> Config {
         Config {
-            discord: DiscordConfig {
-                token: "test".to_string(),
-                enable_dot_commands: true,
-                dot_commands_whitelist: None,
-                enable_commands_channels: None,
-                enable_tag_failed_notifications: false,
-                enable_markdown: false,
-            },
-            wow: WowConfig {
-                platform: "Mac".to_string(),
-                enable_server_motd: false,
-                version: "3.3.5".to_string(),
-                realm_build: None,
-                game_build: None,
-                realmlist: "localhost:3724".to_string(),
-                realm: "Test".to_string(),
-                account: "test".to_string(),
-                password: "test".to_string(),
-                character: "TestChar".to_string(),
-            },
-            guild: GuildEventsConfig::default(),
             chat: ChatConfig {
                 channels: vec![ChannelMapping {
-                    direction: "both".to_string(),
+                    direction: Direction::Both,
                     wow: WowChannelConfig {
                         channel_type: "Guild".to_string(),
                         channel: None,
@@ -811,24 +758,24 @@ mod tests {
                     },
                 }],
             },
-            filters: None,
-            guild_dashboard: GuildDashboardConfig::default(),
-            quirks: QuirksConfig::default(),
+            ..Config::default()
         }
     }
 
     #[test]
     fn test_direction_parsing() {
-        assert_eq!(
-            Direction::from_str("wow_to_discord"),
-            Direction::WowToDiscord
-        );
-        assert_eq!(
-            Direction::from_str("discord_to_wow"),
-            Direction::DiscordToWow
-        );
-        assert_eq!(Direction::from_str("both"), Direction::Both);
-        assert_eq!(Direction::from_str("invalid"), Direction::Both);
+        // Direction is now deserialized by serde with rename_all = "snake_case"
+        let d: Direction = serde_json::from_str("\"wow_to_discord\"").unwrap();
+        assert_eq!(d, Direction::WowToDiscord);
+
+        let d: Direction = serde_json::from_str("\"discord_to_wow\"").unwrap();
+        assert_eq!(d, Direction::DiscordToWow);
+
+        let d: Direction = serde_json::from_str("\"both\"").unwrap();
+        assert_eq!(d, Direction::Both);
+
+        // Invalid values are rejected at deserialization time
+        assert!(serde_json::from_str::<Direction>("\"invalid\"").is_err());
     }
 
     #[test]
@@ -866,7 +813,7 @@ mod tests {
     #[test]
     fn test_router_wow_to_discord() {
         let config = make_config(vec![ChannelMapping {
-            direction: "both".to_string(),
+            direction: Direction::Both,
             wow: WowChannelConfig {
                 channel_type: "Guild".to_string(),
                 channel: None,
@@ -890,7 +837,7 @@ mod tests {
     #[test]
     fn test_router_discord_to_wow() {
         let config = make_config(vec![ChannelMapping {
-            direction: "both".to_string(),
+            direction: Direction::Both,
             wow: WowChannelConfig {
                 channel_type: "Officer".to_string(),
                 channel: None,
@@ -914,7 +861,7 @@ mod tests {
     #[test]
     fn test_router_direction_filtering() {
         let config = make_config(vec![ChannelMapping {
-            direction: "wow_to_discord".to_string(),
+            direction: Direction::WowToDiscord,
             wow: WowChannelConfig {
                 channel_type: "Guild".to_string(),
                 channel: None,
@@ -942,7 +889,7 @@ mod tests {
     #[test]
     fn test_custom_channel_routing() {
         let config = make_config(vec![ChannelMapping {
-            direction: "both".to_string(),
+            direction: Direction::Both,
             wow: WowChannelConfig {
                 channel_type: "Channel".to_string(),
                 channel: Some("World".to_string()),
@@ -971,7 +918,7 @@ mod tests {
     fn test_get_channels_to_join() {
         let config = make_config(vec![
             ChannelMapping {
-                direction: "both".to_string(),
+                direction: Direction::Both,
                 wow: WowChannelConfig {
                     channel_type: "Guild".to_string(),
                     channel: None,
@@ -985,7 +932,7 @@ mod tests {
                 },
             },
             ChannelMapping {
-                direction: "both".to_string(),
+                direction: Direction::Both,
                 wow: WowChannelConfig {
                     channel_type: "Channel".to_string(),
                     channel: Some("World".to_string()),
@@ -999,7 +946,7 @@ mod tests {
                 },
             },
             ChannelMapping {
-                direction: "both".to_string(),
+                direction: Direction::Both,
                 wow: WowChannelConfig {
                     channel_type: "Channel".to_string(),
                     channel: Some("Trade".to_string()),
@@ -1026,7 +973,7 @@ mod tests {
     fn test_multiple_discord_channels() {
         let config = make_config(vec![
             ChannelMapping {
-                direction: "both".to_string(),
+                direction: Direction::Both,
                 wow: WowChannelConfig {
                     channel_type: "Guild".to_string(),
                     channel: None,
@@ -1040,7 +987,7 @@ mod tests {
                 },
             },
             ChannelMapping {
-                direction: "both".to_string(),
+                direction: Direction::Both,
                 wow: WowChannelConfig {
                     channel_type: "Guild".to_string(),
                     channel: None,
@@ -1128,38 +1075,8 @@ mod formatting_tests {
     }
 
     fn make_bridge() -> Bridge {
-        use crate::config::types::{
-            ChatConfig, Config, DiscordConfig, GuildDashboardConfig, GuildEventsConfig,
-            QuirksConfig, WowConfig,
-        };
-        let config = Config {
-            discord: DiscordConfig {
-                token: "test".to_string(),
-                enable_dot_commands: false,
-                dot_commands_whitelist: None,
-                enable_commands_channels: None,
-                enable_tag_failed_notifications: false,
-                enable_markdown: false,
-            },
-            wow: WowConfig {
-                platform: "Mac".to_string(),
-                enable_server_motd: false,
-                version: "3.3.5".to_string(),
-                realm_build: None,
-                game_build: None,
-                realmlist: "localhost".to_string(),
-                realm: "Test".to_string(),
-                account: "test".to_string(),
-                password: "test".to_string(),
-                character: "TestChar".to_string(),
-            },
-            guild: GuildEventsConfig::default(),
-            chat: ChatConfig::default(),
-            filters: None,
-            guild_dashboard: GuildDashboardConfig::default(),
-            quirks: QuirksConfig::default(),
-        };
-        Bridge::new(&config)
+        use crate::config::types::Config;
+        Bridge::new(&Config::default())
     }
 
     #[test]

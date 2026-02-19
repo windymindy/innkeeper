@@ -89,17 +89,6 @@ pub fn validate_config(config: &Config) -> Result<()> {
         if mapping.discord.channel.is_empty() {
             errors.push(format!("chat.channels[{}].discord.channel is required", i));
         }
-
-        // Validate direction
-        let valid_directions = ["both", "wow_to_discord", "discord_to_wow"];
-        if !valid_directions.contains(&mapping.direction.as_str()) {
-            errors.push(format!(
-                "chat.channels[{}].direction '{}' is invalid (use: {})",
-                i,
-                mapping.direction,
-                valid_directions.join(", ")
-            ));
-        }
     }
 
     if chat.channels.is_empty() {
@@ -143,35 +132,13 @@ pub fn has_required_fields(config: &Config) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::GuildDashboardConfig;
     use crate::config::types::*;
 
     fn make_valid_config() -> Config {
         Config {
-            discord: DiscordConfig {
-                token: "valid_token_here".to_string(),
-                enable_dot_commands: true,
-                dot_commands_whitelist: None,
-                enable_commands_channels: None,
-                enable_tag_failed_notifications: false,
-                enable_markdown: false,
-            },
-            wow: WowConfig {
-                platform: "Mac".to_string(),
-                enable_server_motd: true,
-                version: "3.3.5".to_string(),
-                realm_build: None,
-                game_build: None,
-                realmlist: "logon.project-ascension.com".to_string(),
-                realm: "Laughing Skull".to_string(),
-                account: "testuser".to_string(),
-                password: "testpass".to_string(),
-                character: "TestChar".to_string(),
-            },
-            guild: GuildEventsConfig::default(),
             chat: ChatConfig {
                 channels: vec![ChannelMapping {
-                    direction: "both".to_string(),
+                    direction: Direction::Both,
                     wow: WowChannelConfig {
                         channel_type: "Guild".to_string(),
                         channel: None,
@@ -185,9 +152,7 @@ mod tests {
                     },
                 }],
             },
-            filters: None,
-            guild_dashboard: GuildDashboardConfig::default(),
-            quirks: QuirksConfig::default(),
+            ..Config::default()
         }
     }
 
@@ -241,16 +206,6 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not a valid regex"));
-    }
-
-    #[test]
-    fn test_invalid_direction_fails() {
-        let mut config = make_valid_config();
-        config.chat.channels[0].direction = "invalid_direction".to_string();
-
-        let result = validate_config(&config);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("direction"));
     }
 
     #[test]

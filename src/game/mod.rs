@@ -9,6 +9,3 @@ pub mod formatter;
 
 // Re-export commonly used types
 pub use client::GameClient;
-
-// Re-export bridge orchestrator for backwards compatibility
-pub use crate::bridge::Bridge;

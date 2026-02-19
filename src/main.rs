@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     let (wow_to_discord_tx, wow_to_discord_rx) = mpsc::unbounded_channel::<BridgeMessage>();
     let (discord_command_tx, mut discord_command_rx) = mpsc::unbounded_channel::<WowCommand>();
 
-    let bridge = Arc::new(game::Bridge::new(&config));
+    let bridge = Arc::new(bridge::Bridge::new(&config));
     let discord_channels = DiscordChannels {
         outgoing_wow_tx: outgoing_wow_tx.clone(),
         wow_to_discord_rx,

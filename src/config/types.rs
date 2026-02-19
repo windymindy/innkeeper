@@ -536,20 +536,77 @@ pub struct ChatConfig {
     pub channels: Vec<ChannelMapping>,
 }
 
+/// Direction of message flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// WoW to Discord only.
+    WowToDiscord,
+    /// Discord to WoW only.
+    DiscordToWow,
+    /// Bidirectional.
+    Both,
+}
+
+/// Custom deserializer for Direction that handles plain strings.
+///
+/// hocon-rs forwards `deserialize_enum` to `deserialize_any`, which dispatches
+/// to `visit_string` instead of `visit_enum`. Serde's derived Deserialize for
+/// `rename_all` enums doesn't implement `visit_string`, so we need this manual
+/// implementation to support HOCON config files.
+impl<'de> Deserialize<'de> for Direction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        struct DirectionVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for DirectionVisitor {
+            type Value = Direction;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("\"both\", \"wow_to_discord\", or \"discord_to_wow\"")
+            }
+
+            fn visit_str<E: Error>(self, value: &str) -> Result<Direction, E> {
+                match value {
+                    "wow_to_discord" => Ok(Direction::WowToDiscord),
+                    "discord_to_wow" => Ok(Direction::DiscordToWow),
+                    "both" => Ok(Direction::Both),
+                    _ => Err(E::unknown_variant(
+                        value,
+                        &["both", "wow_to_discord", "discord_to_wow"],
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(DirectionVisitor)
+    }
+}
+
+impl Direction {
+    /// Check if this direction allows WoW -> Discord messages.
+    pub fn allows_wow_to_discord(&self) -> bool {
+        matches!(self, Direction::WowToDiscord | Direction::Both)
+    }
+
+    /// Check if this direction allows Discord -> WoW messages.
+    pub fn allows_discord_to_wow(&self) -> bool {
+        matches!(self, Direction::DiscordToWow | Direction::Both)
+    }
+}
+
 /// Maps a WoW channel to a Discord channel.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChannelMapping {
     /// Message direction: "both", "wow_to_discord", "discord_to_wow"
-    #[serde(default = "default_direction")]
-    pub direction: String,
+    pub direction: Direction,
     /// WoW channel configuration
     pub wow: WowChannelConfig,
     /// Discord channel configuration
     pub discord: DiscordChannelConfig,
-}
-
-fn default_direction() -> String {
-    "both".to_string()
 }
 
 /// WoW channel configuration.
@@ -674,6 +731,53 @@ impl Config {
 }
 
 #[cfg(test)]
+impl Default for DiscordConfig {
+    fn default() -> Self {
+        Self {
+            token: "test_token".to_string(),
+            enable_dot_commands: true,
+            dot_commands_whitelist: None,
+            enable_commands_channels: None,
+            enable_tag_failed_notifications: false,
+            enable_markdown: false,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for WowConfig {
+    fn default() -> Self {
+        Self {
+            platform: "Mac".to_string(),
+            enable_server_motd: false,
+            version: "3.3.5".to_string(),
+            realm_build: None,
+            game_build: None,
+            realmlist: "localhost:3724".to_string(),
+            realm: "TestRealm".to_string(),
+            account: "testuser".to_string(),
+            password: "testpass".to_string(),
+            character: "TestChar".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            discord: DiscordConfig::default(),
+            wow: WowConfig::default(),
+            guild: GuildEventsConfig::default(),
+            chat: ChatConfig::default(),
+            filters: None,
+            guild_dashboard: GuildDashboardConfig::default(),
+            quirks: QuirksConfig::default(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::parser::load_config_str;
@@ -748,5 +852,51 @@ mod tests {
         assert!(config.wow.enable_server_motd);
         assert!(config.is_guild_event_enabled("online"));
         assert!(!config.filters.unwrap().enabled);
+    }
+
+    #[test]
+    fn test_direction_deserializes_from_hocon() {
+        let config_str = r#"
+            discord {
+                token="test"
+                enable_dot_commands=true
+                enable_tag_failed_notifications=false
+            }
+            wow {
+                platform=Mac
+                enable_server_motd=false
+                version=3.3.5
+                realmlist=localhost
+                realm=Test
+                account=testuser
+                password=testpass
+                character=TestChar
+            }
+            chat {
+                channels=[
+                    {
+                        direction=wow_to_discord
+                        wow { type=Guild }
+                        discord { channel=guild_chat }
+                    }
+                    {
+                        direction=discord_to_wow
+                        wow { type=Say }
+                        discord { channel=say_chat }
+                    }
+                    {
+                        direction=both
+                        wow { type=Guild }
+                        discord { channel=guild_both }
+                    }
+                ]
+            }
+        "#;
+
+        let config = load_config_str(config_str).expect("Should parse direction enum from HOCON");
+        assert_eq!(config.chat.channels.len(), 3);
+        assert_eq!(config.chat.channels[0].direction, Direction::WowToDiscord);
+        assert_eq!(config.chat.channels[1].direction, Direction::DiscordToWow);
+        assert_eq!(config.chat.channels[2].direction, Direction::Both);
     }
 }

@@ -107,37 +107,15 @@ pub fn get_config_path() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::ChatConfig;
-    use crate::config::types::GuildDashboardConfig;
     use crate::config::types::*;
 
     fn make_test_config() -> Config {
         Config {
             discord: DiscordConfig {
                 token: "original_token".to_string(),
-                enable_dot_commands: false,
-                dot_commands_whitelist: None,
-                enable_commands_channels: None,
-                enable_tag_failed_notifications: false,
-                enable_markdown: false,
+                ..DiscordConfig::default()
             },
-            wow: WowConfig {
-                platform: "Mac".to_string(),
-                enable_server_motd: false,
-                version: "3.3.5".to_string(),
-                realm_build: None,
-                game_build: None,
-                realmlist: "localhost".to_string(),
-                realm: "Test".to_string(),
-                account: "test".to_string(),
-                password: "test".to_string(),
-                character: "TestChar".to_string(),
-            },
-            guild: GuildEventsConfig::default(),
-            chat: ChatConfig::default(),
-            filters: None,
-            guild_dashboard: GuildDashboardConfig::default(),
-            quirks: QuirksConfig::default(),
+            ..Config::default()
         }
     }
 
@@ -160,7 +138,7 @@ mod tests {
 
         // Should remain unchanged
         assert_eq!(result.discord.token, "original_token".to_string());
-        assert_eq!(result.wow.account, "test".to_string());
+        assert_eq!(result.wow.account, "testuser".to_string());
     }
 
     #[test]
