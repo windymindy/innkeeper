@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use tracing::{debug, info};
 
+use crate::common::messages::split_message;
 use crate::common::resources::get_zone_name;
 use crate::common::types::{ChatType, GuildMember};
 use crate::common::{BridgeMessage, CommandResponseData, DiscordMessage};
@@ -16,8 +17,7 @@ use crate::config::types::{
 };
 use crate::discord::resolver::MessageResolver;
 use crate::game::formatter::{
-    split_message, FormatContext, MessageFormatter, DEFAULT_DISCORD_TO_WOW_FORMAT,
-    DEFAULT_WOW_TO_DISCORD_FORMAT,
+    FormatContext, MessageFormatter, DEFAULT_DISCORD_TO_WOW_FORMAT, DEFAULT_WOW_TO_DISCORD_FORMAT,
 };
 
 use super::filter::{FilterDirection, MessageFilter};

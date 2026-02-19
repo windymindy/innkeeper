@@ -1,6 +1,6 @@
 //! Game packet handling logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
 use sha1::{Digest, Sha1};
@@ -30,6 +30,10 @@ use crate::protocol::packets::PacketDecode;
 use anyhow::{anyhow, Result};
 use bytes::Buf;
 
+/// Maximum number of distinct GUIDs with pending name resolution.
+/// When exceeded, the oldest entry is evicted (messages silently dropped).
+const MAX_PENDING_GUIDS: usize = 256;
+
 /// Game protocol handler state.
 pub struct GameHandler {
     account: String,
@@ -55,6 +59,10 @@ pub struct GameHandler {
     pub player_names: HashMap<u64, Player>,
     /// Pending chat messages waiting for name resolution
     pub pending_messages: HashMap<u64, Vec<ChatMessage>>,
+    /// GUIDs that already have an in-flight CMSG_NAME_QUERY (avoids redundant queries)
+    pub pending_name_queries: HashSet<u64>,
+    /// Insertion-order tracking for pending_messages (front = oldest)
+    pending_message_order: VecDeque<u64>,
 
     /// Sit quirk state
     pub tried_to_sit: bool,
@@ -80,6 +88,8 @@ impl GameHandler {
             last_roster_request: None,
             player_names: HashMap::new(),
             pending_messages: HashMap::new(),
+            pending_name_queries: HashSet::new(),
+            pending_message_order: VecDeque::new(),
             tried_to_sit: false,
             world_position: None,
         }
@@ -271,6 +281,8 @@ impl GameHandler {
             zone_id: 0,
         };
         self.player_names.insert(response.guid, player);
+        self.pending_name_queries.remove(&response.guid);
+        self.pending_message_order.retain(|&g| g != response.guid);
 
         // Process any pending messages for this GUID
         let mut resolved = Vec::new();
@@ -294,6 +306,36 @@ impl GameHandler {
     /// Build CMSG_NAME_QUERY packet.
     pub fn build_name_query(&self, guid: u64) -> NameQuery {
         NameQuery { guid }
+    }
+
+    /// Queue a chat message for name resolution, with bounded eviction.
+    ///
+    /// If this GUID already has pending messages, the new message is appended.
+    /// If this is a new GUID and we're at capacity, the oldest GUID's pending
+    /// messages are evicted (dropped) to make room.
+    fn queue_pending_message(&mut self, guid: u64, msg: ChatMessage) {
+        let is_new_guid = !self.pending_messages.contains_key(&guid);
+
+        if is_new_guid && self.pending_messages.len() >= MAX_PENDING_GUIDS {
+            // Evict the oldest entry
+            if let Some(oldest_guid) = self.pending_message_order.pop_front() {
+                let evicted = self.pending_messages.remove(&oldest_guid);
+                self.pending_name_queries.remove(&oldest_guid);
+                if let Some(msgs) = evicted {
+                    warn!(
+                        guid = oldest_guid,
+                        count = msgs.len(),
+                        "Evicted pending messages for GUID (name query never resolved)"
+                    );
+                }
+            }
+        }
+
+        self.pending_messages.entry(guid).or_default().push(msg);
+
+        if is_new_guid {
+            self.pending_message_order.push_back(guid);
+        }
     }
 
     /// Handle SMSG_CHANNEL_NOTIFY.
@@ -663,10 +705,7 @@ impl GameHandler {
                 format: Some("%user %message.".to_string()),
                 achievement_id: msg.achievement_id,
             };
-            self.pending_messages
-                .entry(msg.sender_guid)
-                .or_default()
-                .push(chat_msg);
+            self.queue_pending_message(msg.sender_guid, chat_msg);
             return Ok(None);
         }
 
@@ -702,10 +741,7 @@ impl GameHandler {
 
         // Queue message for name resolution
         let chat_msg = msg.to_chat_message(format!("Unknown-{}", msg.sender_guid));
-        self.pending_messages
-            .entry(msg.sender_guid)
-            .or_default()
-            .push(chat_msg.clone());
+        self.queue_pending_message(msg.sender_guid, chat_msg);
 
         // Return None to indicate name query is needed
         debug!("Sender {} not in cache, need name query", msg.sender_guid);

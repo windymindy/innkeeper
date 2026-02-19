@@ -119,14 +119,14 @@ impl GameClient {
                     if *shutdown_rx.borrow() {
                         self.handle_shutdown(&mut handler, &mut connection).await?;
                         logout_timeout = Some(Box::pin(tokio::time::sleep(
-                            tokio::time::Duration::from_secs(20),
+                            tokio::time::Duration::from_secs(21),
                         )));
                     }
                 }
 
                 _ = async { logout_timeout.as_mut().unwrap().as_mut().await },
                     if logout_timeout.is_some() => {
-                    warn!("Logout timed out after 20s - closing connection");
+                    warn!("Logout timed out after 21s - closing connection");
                     return Ok(());
                 }
 
@@ -369,10 +369,12 @@ impl GameClient {
                 }
             }
             None => {
-                // Name query needed - send queries for all unknown GUIDs
+                // Send name queries only for GUIDs that don't already have one in-flight
                 for guid in handler.pending_messages.keys() {
-                    let name_query = handler.build_name_query(*guid);
-                    connection.send(name_query.into()).await?;
+                    if handler.pending_name_queries.insert(*guid) {
+                        let name_query = handler.build_name_query(*guid);
+                        connection.send(name_query.into()).await?;
+                    }
                 }
             }
         }
@@ -396,10 +398,12 @@ impl GameClient {
                 }
             }
             None => {
-                // Name query needed - send queries for all unknown GUIDs
+                // Send name queries only for GUIDs that don't already have one in-flight
                 for guid in handler.pending_messages.keys() {
-                    let name_query = handler.build_name_query(*guid);
-                    connection.send(name_query.into()).await?;
+                    if handler.pending_name_queries.insert(*guid) {
+                        let name_query = handler.build_name_query(*guid);
+                        connection.send(name_query.into()).await?;
+                    }
                 }
             }
         }

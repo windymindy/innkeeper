@@ -16,7 +16,7 @@ use serenity::model::guild::Guild;
 use crate::bridge::{
     Bridge, PendingBridgeState, ResolvedBridgeState,
 };
-use crate::common::messages::DashboardEvent;
+use crate::common::messages::{split_message_preserving_newlines, DashboardEvent};
 use crate::common::{ActivityStatus, BridgeMessage, DiscordMessage};
 use crate::config::types::GuildDashboardConfig;
 use crate::discord::commands::{CommandHandler, CommandResponse, WowCommand};
@@ -229,7 +229,7 @@ impl BridgeHandler {
             }
         } else {
             // Large message - split into chunks at newline boundaries
-            let chunks = split_message(message, MAX_MESSAGE_LENGTH);
+            let chunks = split_message_preserving_newlines(message, MAX_MESSAGE_LENGTH);
             for (i, chunk) in chunks.iter().enumerate() {
                 if let Err(e) = channel.say(context.http.clone(), chunk).await {
                     error!("Failed to send command response chunk {} to Discord: {}", i + 1, e);
@@ -410,45 +410,4 @@ impl BridgeHandler {
             let _ = tx.send(());
         }
     }
-}
-
-/// Split a large message into chunks at newline boundaries.
-/// Ensures each chunk is under the max_length limit.
-fn split_message(message: &str, max_length: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current_chunk = String::new();
-
-    for line in message.lines() {
-        // If a single line is too long, we have to split it
-        if line.len() > max_length {
-            // Flush current chunk first
-            if !current_chunk.is_empty() {
-                chunks.push(current_chunk.clone());
-                current_chunk.clear();
-            }
-
-            // Split the long line into chunks
-            let line_bytes = line.as_bytes();
-            for chunk in line_bytes.chunks(max_length) {
-                chunks.push(String::from_utf8_lossy(chunk).to_string());
-            }
-        } else if current_chunk.len() + line.len() + 1 > max_length {
-            // Adding this line would exceed limit, flush current chunk
-            chunks.push(current_chunk.clone());
-            current_chunk = line.to_string();
-        } else {
-            // Add line to current chunk
-            if !current_chunk.is_empty() {
-                current_chunk.push('\n');
-            }
-            current_chunk.push_str(line);
-        }
-    }
-
-    // Don't forget the last chunk
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk);
-    }
-
-    chunks
 }
