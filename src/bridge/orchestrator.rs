@@ -12,15 +12,14 @@ use crate::common::messages::split_message;
 use crate::common::resources::get_zone_name;
 use crate::common::types::{ChatType, GuildMember};
 use crate::common::{BridgeMessage, CommandResponseData, DiscordMessage};
-use crate::config::types::{
-    ChannelMapping, ChatConfig, Config, Direction, FiltersConfig, WowChannelConfig,
-};
+use crate::config::types::{ChannelMapping, ChatConfig, Config, Direction, FiltersConfig};
 use crate::discord::resolver::MessageResolver;
 use crate::game::formatter::{
     FormatContext, MessageFormatter, DEFAULT_DISCORD_TO_WOW_FORMAT, DEFAULT_WOW_TO_DISCORD_FORMAT,
 };
 
 use super::filter::{FilterDirection, MessageFilter};
+use super::state::parse_channel_config;
 
 /// The main bridge that orchestrates message flow.
 pub struct Bridge {
@@ -554,26 +553,6 @@ fn build_per_channel_filters(channels: &[ChannelMapping]) -> HashMap<String, Mes
     filters
 }
 
-/// Parse a ChatType from WowChannelConfig, matching Scala's parse() function.
-/// Corresponds to GamePackets.ChatEvents.parse() in the Scala code.
-pub fn parse_channel_config(config: &WowChannelConfig) -> (ChatType, Option<String>) {
-    match config.channel_type.to_lowercase().as_str() {
-        "system" => (ChatType::System, None),
-        "say" => (ChatType::Say, None),
-        "guild" => (ChatType::Guild, None),
-        "officer" => (ChatType::Officer, None),
-        "yell" => (ChatType::Yell, None),
-        "emote" => (ChatType::Emote, None),
-        "whisper" => (ChatType::Whisper, None),
-        "whispering" => (ChatType::WhisperInform, None),
-        "channel" | "custom" => (ChatType::Channel, config.channel.clone()),
-        _ => {
-            // For unknown types, default to custom channel with the type as name
-            (ChatType::Channel, Some(config.channel_type.clone()))
-        }
-    }
-}
-
 /// A configured route between WoW and Discord channels.
 #[derive(Debug, Clone)]
 pub struct Route {
@@ -683,9 +662,6 @@ impl MessageRouter {
     }
 
     /// Get Discord channels that should receive a message from the given WoW channel.
-    ///
-    /// **Important**: `channel_name` must be pre-lowercased by the caller to avoid
-    /// allocation on every lookup. Keys are stored lowercase at config load time.
     pub fn get_discord_targets(
         &self,
         chat_type: u8,
@@ -778,38 +754,6 @@ mod tests {
 
         // Invalid values are rejected at deserialization time
         assert!(serde_json::from_str::<Direction>("\"invalid\"").is_err());
-    }
-
-    #[test]
-    fn test_parse_channel_config() {
-        let config = WowChannelConfig {
-            channel_type: "guild".to_string(),
-            channel: None,
-            format: None,
-            filters: None,
-        };
-        let (chat_type, channel_name) = parse_channel_config(&config);
-        assert_eq!(chat_type, ChatType::Guild);
-        assert_eq!(channel_name, None);
-
-        let config = WowChannelConfig {
-            channel_type: "GUILD".to_string(),
-            channel: None,
-            format: None,
-            filters: None,
-        };
-        let (chat_type, _) = parse_channel_config(&config);
-        assert_eq!(chat_type, ChatType::Guild);
-
-        let config = WowChannelConfig {
-            channel_type: "channel".to_string(),
-            channel: Some("World".to_string()),
-            format: None,
-            filters: None,
-        };
-        let (chat_type, channel_name) = parse_channel_config(&config);
-        assert_eq!(chat_type, ChatType::Channel);
-        assert_eq!(channel_name, Some("World".to_string()));
     }
 
     #[test]

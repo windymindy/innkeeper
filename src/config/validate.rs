@@ -58,17 +58,19 @@ pub fn validate_config(config: &Config) -> Result<()> {
 
         // Validate channel type
         let valid_types = [
-            "Guild",
-            "Officer",
-            "Say",
-            "Yell",
-            "Emote",
-            "System",
-            "Channel",
-            "Whisper",
-            "Whispering",
+            "guild",
+            "officer",
+            "say",
+            "yell",
+            "emote",
+            "system",
+            "channel",
+            "custom",
+            "whisper",
+            "whispering",
         ];
-        if !valid_types.contains(&mapping.wow.channel_type.as_str()) {
+        let channel_type_lower = mapping.wow.channel_type.to_lowercase();
+        if !valid_types.contains(&channel_type_lower.as_str()) {
             errors.push(format!(
                 "chat.channels[{}].wow.type '{}' is invalid (use: {})",
                 i,
@@ -78,7 +80,9 @@ pub fn validate_config(config: &Config) -> Result<()> {
         }
 
         // Custom channels need a channel name
-        if mapping.wow.channel_type == "Channel" && mapping.wow.channel.is_none() {
+        if (channel_type_lower == "channel" || channel_type_lower == "custom")
+            && mapping.wow.channel.is_none()
+        {
             errors.push(format!(
                 "chat.channels[{}].wow.channel is required when type is 'Channel'",
                 i
@@ -206,6 +210,50 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not a valid regex"));
+    }
+
+    #[test]
+    fn test_channel_type_case_insensitive() {
+        // Lowercase should be accepted (matches parse_channel_config behavior)
+        for channel_type in &["guild", "Guild", "GUILD", "say", "Say", "system", "System"] {
+            let mut config = make_valid_config();
+            config.chat.channels[0].wow.channel_type = channel_type.to_string();
+            assert!(
+                validate_config(&config).is_ok(),
+                "channel type '{}' should be valid",
+                channel_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_custom_channel_type_accepted() {
+        let mut config = make_valid_config();
+        config.chat.channels[0].wow.channel_type = "custom".to_string();
+        config.chat.channels[0].wow.channel = Some("Trade".to_string());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_custom_channel_requires_name() {
+        let mut config = make_valid_config();
+        config.chat.channels[0].wow.channel_type = "custom".to_string();
+        config.chat.channels[0].wow.channel = None;
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("channel is required"));
+    }
+
+    #[test]
+    fn test_invalid_channel_type_rejected() {
+        let mut config = make_valid_config();
+        config.chat.channels[0].wow.channel_type = "bogus".to_string();
+        let result = validate_config(&config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid"));
     }
 
     #[test]

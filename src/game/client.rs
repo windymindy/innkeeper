@@ -63,7 +63,7 @@ impl GameClient {
         let mut connection = new_game_connection(stream);
         let mut handler = GameHandler::new(
             &self.config.wow.account,
-            session.session_key,
+            &session.session_key,
             session.realm.id as u32,
             &self.config.wow.character,
         );

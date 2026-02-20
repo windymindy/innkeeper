@@ -611,41 +611,6 @@ impl MessageResolver {
             .collect()
     }
 
-    /// Process a message from WoW for Discord.
-    ///
-    /// This is the full processing pipeline that includes:
-    /// - Link resolution (items, spells, quests, achievements)
-    /// - Texture/color stripping
-    /// - Emoji resolution
-    /// - Tag resolution (@mentions)
-    /// - Markdown escaping
-    ///
-    /// Returns the processed message and any tag resolution errors.
-    pub fn process_wow_to_discord(
-        &self,
-        cache: &Cache,
-        channel_id: ChannelId,
-        message: &str,
-        self_user_id: u64,
-    ) -> TagResolutionResult {
-        // First, do the basic processing
-        let step1 = self.resolve_links(message);
-        let step2 = self.strip_texture_coding(&step1);
-        let step3 = self.strip_color_coding(&step2);
-        let step4 = self.resolve_emojis(cache, &step3);
-
-        // Then resolve tags
-        let tag_result = self.resolve_tags(cache, channel_id, &step4, self_user_id);
-
-        // Finally escape markdown (but preserve Discord mentions)
-        let final_message = self.escape_discord_markdown_preserve_mentions(&tag_result.message);
-
-        TagResolutionResult {
-            message: final_message,
-            errors: tag_result.errors,
-        }
-    }
-
     /// Escape Discord markdown but preserve Discord mention syntax.
     fn escape_discord_markdown_preserve_mentions(&self, message: &str) -> String {
         if self.enable_markdown {

@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 use backon::BackoffBuilder;
 
 use crate::bridge::{Bridge, ChannelConfig, PendingBridgeState};
-use crate::bridge::orchestrator::parse_channel_config;
+use crate::bridge::state::parse_channel_config;
 use crate::common::{ActivityStatus, BridgeMessage};
 use crate::common::messages::DashboardEvent;
 use crate::config::types::{Config, Direction, GuildDashboardConfig};

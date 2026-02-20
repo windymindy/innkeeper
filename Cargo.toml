@@ -1,6 +1,6 @@
 [package]
 name = "innkeeper"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Discord-WoW chat bridge for Ascension private server"
 repository = "https://github.com/windymindy/innkeeper"

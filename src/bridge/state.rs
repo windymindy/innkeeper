@@ -6,8 +6,9 @@ use serenity::model::channel::GuildChannel;
 use serenity::model::id::ChannelId;
 use tokio::sync::mpsc;
 
+use crate::common::types::ChatType;
 use crate::common::BridgeMessage;
-use crate::config::types::{Direction, GuildDashboardConfig};
+use crate::config::types::{Direction, GuildDashboardConfig, WowChannelConfig};
 use crate::discord::commands::WowCommand;
 use crate::discord::resolver::MessageResolver;
 
@@ -199,9 +200,9 @@ impl PendingBridgeState {
 
 /// Fully resolved bridge state.
 ///
-/// This is immutable after creation and can be safely shared via `Arc`
-/// or cloned into task-specific contexts.
-#[derive(Debug, Clone)]
+/// This is immutable after creation and shared via `Arc`.
+/// `Clone` is intentionally not derived — use `Arc` for sharing.
+#[derive(Debug)]
 pub struct ResolvedBridgeState {
     /// Map from (chat_type, channel_name) to Discord channels.
     pub wow_to_discord: HashMap<(u8, Option<String>), Vec<ChannelConfig>>,
@@ -268,9 +269,30 @@ impl ResolvedBridgeState {
     }
 }
 
+/// Parse a ChatType from WowChannelConfig, matching Scala's parse() function.
+/// Corresponds to GamePackets.ChatEvents.parse() in the Scala code.
+pub fn parse_channel_config(config: &WowChannelConfig) -> (ChatType, Option<String>) {
+    match config.channel_type.to_lowercase().as_str() {
+        "system" => (ChatType::System, None),
+        "say" => (ChatType::Say, None),
+        "guild" => (ChatType::Guild, None),
+        "officer" => (ChatType::Officer, None),
+        "yell" => (ChatType::Yell, None),
+        "emote" => (ChatType::Emote, None),
+        "whisper" => (ChatType::Whisper, None),
+        "whispering" => (ChatType::WhisperInform, None),
+        "channel" | "custom" => (ChatType::Channel, config.channel.clone()),
+        _ => {
+            // For unknown types, default to custom channel with the type as name
+            (ChatType::Channel, Some(config.channel_type.clone()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::types::WowChannelConfig;
 
     fn create_test_resolved_state() -> ResolvedBridgeState {
         let (wow_tx, _) = mpsc::unbounded_channel();
@@ -351,5 +373,37 @@ mod tests {
 
         assert!(!state.should_send_dot_command_directly(".help"));
         assert!(!state.should_send_dot_command_directly(".anything"));
+    }
+
+    #[test]
+    fn test_parse_channel_config() {
+        let config = WowChannelConfig {
+            channel_type: "guild".to_string(),
+            channel: None,
+            format: None,
+            filters: None,
+        };
+        let (chat_type, channel_name) = parse_channel_config(&config);
+        assert_eq!(chat_type, ChatType::Guild);
+        assert_eq!(channel_name, None);
+
+        let config = WowChannelConfig {
+            channel_type: "GUILD".to_string(),
+            channel: None,
+            format: None,
+            filters: None,
+        };
+        let (chat_type, _) = parse_channel_config(&config);
+        assert_eq!(chat_type, ChatType::Guild);
+
+        let config = WowChannelConfig {
+            channel_type: "channel".to_string(),
+            channel: Some("World".to_string()),
+            format: None,
+            filters: None,
+        };
+        let (chat_type, channel_name) = parse_channel_config(&config);
+        assert_eq!(chat_type, ChatType::Channel);
+        assert_eq!(channel_name, Some("World".to_string()));
     }
 }

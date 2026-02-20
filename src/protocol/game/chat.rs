@@ -6,7 +6,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::common::types::{ChatMessage, ChatType, Guid};
 use crate::protocol::packets::{
-    read_cstring, PacketDecode, PacketEncode, MAX_CSTRING_LONG, MAX_CSTRING_SHORT,
+    read_cstring, read_packed_guid, PacketDecode, PacketEncode, MAX_CSTRING_LONG, MAX_CSTRING_SHORT,
 };
 use anyhow::{anyhow, Result};
 
@@ -566,38 +566,6 @@ impl PacketDecode for NameQueryResponse {
             class,
         })
     }
-}
-
-/// Helper function to read a packed GUID (variable length, 1-9 bytes).
-/// WoW uses packed GUIDs to save bandwidth - only non-zero bytes of the GUID are sent.
-fn read_packed_guid(buf: &mut Bytes) -> Result<u64> {
-    if buf.remaining() < 1 {
-        return Err(anyhow!(
-            "Packet too short: need {} bytes, got {}",
-            1,
-            buf.remaining()
-        ));
-    }
-
-    let set = buf.get_u8();
-    let mut result = 0u64;
-
-    for i in 0..8 {
-        let on_bit = 1 << i;
-        if (set & on_bit) == on_bit {
-            if buf.remaining() < 1 {
-                return Err(anyhow!(
-                    "Packet too short: need {} bytes, got {}",
-                    1,
-                    buf.remaining()
-                ));
-            }
-            let byte_val = buf.get_u8() as u64;
-            result |= byte_val << (i * 8);
-        }
-    }
-
-    Ok(result)
 }
 
 /// Get the language ID for a race (for sending messages).

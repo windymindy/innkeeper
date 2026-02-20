@@ -27,7 +27,7 @@ use crate::protocol::game::packets::{
     InitWorldStates, KeepAlive, LoginVerifyWorld, Ping, PlayerLogin, Pong, TimeSyncReq,
     TimeSyncResp,
 };
-use crate::protocol::packets::PacketDecode;
+use crate::protocol::packets::{read_packed_guid, PacketDecode};
 use anyhow::{anyhow, Result};
 use bytes::Buf;
 
@@ -74,10 +74,10 @@ pub struct GameHandler {
 }
 
 impl GameHandler {
-    pub fn new(account: &str, session_key: [u8; 40], realm_id: u32, character_name: &str) -> Self {
+    pub fn new(account: &str, session_key: &[u8; 40], realm_id: u32, character_name: &str) -> Self {
         Self {
             account: account.to_string(),
-            session_key,
+            session_key: *session_key,
             realm_id,
             character_name: character_name.to_string(),
             player: None,
@@ -811,11 +811,11 @@ impl GameHandler {
 
     /// Handle SMSG_INVALIDATE_PLAYER.
     /// Removes the player from the name cache when the server signals they're no longer valid.
-    pub fn handle_invalidate_player(&mut self, payload: Bytes) -> Result<()> {
+    pub fn handle_invalidate_player(&mut self, mut payload: Bytes) -> Result<()> {
         use crate::protocol::game::packets::InvalidatePlayer;
         use crate::protocol::packets::PacketDecode;
 
-        let packet = InvalidatePlayer::decode(&mut payload.clone())?;
+        let packet = InvalidatePlayer::decode(&mut payload)?;
         if self.player_names.remove(&packet.guid).is_some() {
             debug!(
                 "Removed player {} from name cache (SMSG_INVALIDATE_PLAYER)",
@@ -860,17 +860,17 @@ impl GameHandler {
             match block_type {
                 0 => {
                     // UPDATETYPE_VALUES
-                    let _guid = unpack_guid(&mut payload)?;
+                    let _guid = read_packed_guid(&mut payload)?;
                     self.parse_update_fields(&mut payload)?;
                 }
                 1 => {
                     // UPDATETYPE_MOVEMENT
-                    let _guid = unpack_guid(&mut payload)?;
+                    let _guid = read_packed_guid(&mut payload)?;
                     self.parse_movement(&mut payload)?;
                 }
                 2 | 3 => {
                     // UPDATETYPE_CREATE_OBJECT, UPDATETYPE_CREATE_OBJECT2
-                    let guid = unpack_guid(&mut payload)?;
+                    let guid = read_packed_guid(&mut payload)?;
                     if payload.remaining() < 1 {
                         return Err(anyhow!(
                             "handle_update_object: need 1 byte for obj_type, have 0"
@@ -922,7 +922,7 @@ impl GameHandler {
                     }
                     let count = payload.get_u32_le();
                     for _ in 0..count {
-                        unpack_guid(&mut payload)?;
+                        read_packed_guid(&mut payload)?;
                     }
                 }
                 _ => {
@@ -1009,7 +1009,7 @@ impl GameHandler {
 
             if (flags2 & 0x200) == 0x200 {
                 // MOVEMENTFLAG_ONTRANSPORT: guid + pos(16) + time(4) + seat(1) = 21 + guid
-                unpack_guid(buf)?;
+                read_packed_guid(buf)?;
                 let transport_bytes = 4 * 4 + 4 + 1; // 21
                 if buf.remaining() < transport_bytes {
                     return Err(anyhow!(
@@ -1158,7 +1158,7 @@ impl GameHandler {
         } else {
             if (flags & 0x100) == 0x100 {
                 // UPDATEFLAG_POSITION: guid + xyz(12) + extra(16) + unknown(4) = 32 + guid
-                unpack_guid(buf)?;
+                read_packed_guid(buf)?;
                 if buf.remaining() < 32 {
                     return Err(anyhow!(
                         "parse_movement: POSITION needs 32 bytes, have {}",
@@ -1207,7 +1207,7 @@ impl GameHandler {
         }
         if (flags & 0x4) == 0x4 {
             // UPDATEFLAG_HAS_TARGET
-            unpack_guid(buf)?;
+            read_packed_guid(buf)?;
         }
         if (flags & 0x2) == 0x2 {
             // UPDATEFLAG_TRANSPORT
@@ -1254,32 +1254,6 @@ struct Movement {
 
 fn close_to(x: f32, y: f32, precision: f32) -> bool {
     (x - y).abs() < precision
-}
-
-fn unpack_guid(buf: &mut Bytes) -> Result<u64> {
-    if buf.remaining() < 1 {
-        return Err(anyhow!("unpack_guid: buffer empty, need mask byte"));
-    }
-    let mask = buf.get_u8();
-    let needed = mask.count_ones() as usize;
-    if buf.remaining() < needed {
-        return Err(anyhow!(
-            "unpack_guid: need {} GUID bytes for mask {:#04x}, have {}",
-            needed,
-            mask,
-            buf.remaining()
-        ));
-    }
-    let mut guid: u64 = 0;
-
-    for i in 0..8 {
-        if (mask & (1 << i)) != 0 {
-            let byte = buf.get_u8();
-            guid |= (byte as u64) << (i * 8);
-        }
-    }
-
-    Ok(guid)
 }
 
 #[cfg(feature = "test_guild_dashboard")]

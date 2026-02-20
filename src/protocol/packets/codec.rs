@@ -32,6 +32,34 @@ pub fn read_cstring(buf: &mut impl Buf, max_len: usize) -> Result<String> {
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
+/// Read a packed GUID (variable length, 1–9 bytes) from any `Buf`.
+///
+/// WoW uses packed GUIDs to save bandwidth — a leading bitmask byte indicates
+/// which of the 8 GUID bytes follow.  Only non-zero bytes are transmitted.
+pub fn read_packed_guid(buf: &mut impl Buf) -> Result<u64> {
+    if !buf.has_remaining() {
+        return Err(anyhow!("read_packed_guid: buffer empty, need mask byte"));
+    }
+    let mask = buf.get_u8();
+    let needed = mask.count_ones() as usize;
+    if buf.remaining() < needed {
+        return Err(anyhow!(
+            "read_packed_guid: need {} GUID bytes for mask {:#04x}, have {}",
+            needed,
+            mask,
+            buf.remaining()
+        ));
+    }
+    let mut guid: u64 = 0;
+    for i in 0..8 {
+        if (mask & (1 << i)) != 0 {
+            let byte = buf.get_u8();
+            guid |= (byte as u64) << (i * 8);
+        }
+    }
+    Ok(guid)
+}
+
 /// A WoW protocol packet.
 #[derive(Debug, Clone)]
 pub struct Packet {
