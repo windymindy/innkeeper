@@ -135,25 +135,6 @@ impl MessageResolver {
     /// Converts :emoji_name: to <:emoji_name:emoji_id> for custom server emojis.
     /// Also resolves standard emojis like :smile: to 😀 if possible (optional but good for consistency).
     pub fn resolve_emojis(&self, cache: &Cache, message: &str) -> String {
-        // Build emoji map from cache
-        let custom_emoji_map: std::collections::HashMap<String, String> = cache
-            .guilds()
-            .iter()
-            .filter_map(|guild_id| cache.guild(*guild_id))
-            .flat_map(|guild| {
-                guild
-                    .emojis
-                    .iter()
-                    .map(|(id, emoji)| {
-                        (
-                            emoji.name.to_lowercase(),
-                            format!("<:{}:{}>", emoji.name, id),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
         let mut result = String::with_capacity(message.len() * 2);
         let mut chars = message.char_indices().peekable();
 
@@ -186,9 +167,10 @@ impl MessageResolver {
                     if !shortcode.is_empty() {
                         let lower_shortcode = shortcode.to_lowercase();
 
-                        // Check custom emojis first
-                        if let Some(replacement) = custom_emoji_map.get(&lower_shortcode) {
-                            result.push_str(replacement);
+                        // Check custom emojis first (lazy lookup from cache)
+                        if let Some(replacement) = Self::find_custom_emoji(cache, &lower_shortcode)
+                        {
+                            result.push_str(&replacement);
                         }
                         // Then check standard emojis
                         else if let Some(emoji) = emojis::get_by_shortcode(&lower_shortcode) {
@@ -214,6 +196,23 @@ impl MessageResolver {
         }
 
         result
+    }
+
+    /// Search the cache for a custom emoji by lowercase name.
+    ///
+    /// Only called when a `:shortcode:` is actually found in a message,
+    /// so we avoid iterating guild emojis for messages that have none.
+    fn find_custom_emoji(cache: &Cache, lower_name: &str) -> Option<String> {
+        for guild_id in cache.guilds() {
+            if let Some(guild) = cache.guild(guild_id) {
+                for (id, emoji) in &guild.emojis {
+                    if emoji.name.to_lowercase() == lower_name {
+                        return Some(format!("<:{}:{}>", emoji.name, id));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Escape Discord markdown special characters.
@@ -354,8 +353,8 @@ impl MessageResolver {
     /// Post-process a formatted message for Discord.
     ///
     /// This applies Discord-specific processing after Bridge formatting:
-    /// - Emoji resolution (requires cache)
-    /// - Tag resolution (@mentions)
+    /// - Emoji resolution (lazy lookup from cache, only on shortcode hits)
+    /// - Tag resolution (@mentions, requires cache)
     /// - Markdown escaping (preserving mentions)
     ///
     /// Returns the processed message and any tag resolution errors.

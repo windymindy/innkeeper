@@ -92,8 +92,8 @@ guild {
   }
 }
 
-# Optional: Guild dashboard (shows online members in a channel)
 # guild-dashboard {
+#   enabled=true
 #   channel=guild-online
 # }
 

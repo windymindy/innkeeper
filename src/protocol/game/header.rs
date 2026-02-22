@@ -18,12 +18,12 @@ impl GameHeaderCrypt {
     }
 
     /// Decrypt the header data (NOP for Ascension).
-    pub fn decrypt(&self, _data: &mut [u8]) {
+    pub fn decrypt(&mut self, _data: &mut [u8]) {
         // Ascension doesn't encrypt game headers in this implementation
     }
 
     /// Encrypt the header data (NOP for Ascension).
-    pub fn encrypt(&self, _data: &mut [u8]) {
+    pub fn encrypt(&mut self, _data: &mut [u8]) {
         // Ascension doesn't encrypt game headers in this implementation
     }
 

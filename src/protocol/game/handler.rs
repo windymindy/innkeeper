@@ -1,6 +1,9 @@
 //! Game packet handling logic.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
+
+use lru::LruCache;
 
 use bytes::Bytes;
 use sha1::{Digest, Sha1};
@@ -56,8 +59,8 @@ pub struct GameHandler {
     /// Last time guild roster was requested (for periodic updates)
     pub last_roster_request: Option<std::time::Instant>,
 
-    /// Cache of player names by GUID
-    pub player_names: HashMap<u64, Player>,
+    /// Cache of player names by GUID (LRU-bounded to prevent unbounded growth)
+    pub player_names: LruCache<u64, Player>,
     /// Pending chat messages waiting for name resolution
     pub pending_messages: HashMap<u64, Vec<ChatMessage>>,
     /// GUIDs that already have an in-flight CMSG_NAME_QUERY (avoids redundant queries)
@@ -89,7 +92,7 @@ impl GameHandler {
             guild_roster: HashMap::new(),
             guild_motd: None,
             last_roster_request: None,
-            player_names: HashMap::new(),
+            player_names: LruCache::new(NonZeroUsize::new(1024).unwrap()),
             pending_messages: HashMap::new(),
             pending_name_queries: HashSet::new(),
             pending_message_order: VecDeque::new(),
@@ -301,7 +304,7 @@ impl GameHandler {
             race: crate::common::resources::Race::from_id(response.race as u8),
             zone_id: 0,
         };
-        self.player_names.insert(response.guid, player);
+        self.player_names.put(response.guid, player);
         self.pending_name_queries.remove(&response.guid);
         self.pending_message_order.retain(|&g| g != response.guid);
 
@@ -816,7 +819,7 @@ impl GameHandler {
         use crate::protocol::packets::PacketDecode;
 
         let packet = InvalidatePlayer::decode(&mut payload)?;
-        if self.player_names.remove(&packet.guid).is_some() {
+        if self.player_names.pop(&packet.guid).is_some() {
             debug!(
                 "Removed player {} from name cache (SMSG_INVALIDATE_PLAYER)",
                 packet.guid

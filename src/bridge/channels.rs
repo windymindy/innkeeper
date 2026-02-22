@@ -72,6 +72,12 @@ impl ChannelBundle {
     /// Returns a structured bundle containing all channels needed
     /// for bidirectional message flow between Discord and WoW.
     pub fn new() -> Self {
+        // Unbounded channels are intentional. Bounded channels would either drop
+        // messages (try_send) or backpressure the game client's packet loop (send().await),
+        // risking WoW server disconnects from missed keepalives. All producers are
+        // naturally rate-limited (WoW server throttling, Discord gateway rate limits,
+        // manual user input, fixed-interval timers), and every channel has a dedicated
+        // reader that drains without blocking. No sustained unbounded growth is possible.
         let (wow_tx, wow_rx) = mpsc::unbounded_channel();
         let (outgoing_wow_tx, outgoing_wow_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();

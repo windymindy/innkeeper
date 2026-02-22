@@ -8,14 +8,53 @@ use crate::protocol::game::header::GameHeaderCrypt;
 use crate::protocol::packets::Packet;
 use anyhow::Error;
 
+/// Decoder state machine for partial reads.
+///
+/// Mirrors Scala's `var size = 0; var id = 0` stateful fields, but extended
+/// to handle the case where a large-packet header is split between reads
+/// (4 bytes arrived but the 5th hasn't).
+///
+/// ```text
+/// Fresh → (decrypt 4 bytes, check 0x80)
+///   ├─ normal packet → WaitingPayload { payload_size, opcode }
+///   └─ large packet, 5th byte missing → NeedLargeExtra { header }
+///
+/// NeedLargeExtra → (decrypt 5th byte, parse full header)
+///   └─ WaitingPayload { payload_size, opcode }
+///
+/// WaitingPayload → (payload arrives, emit packet)
+///   └─ Fresh
+/// ```
+enum DecoderState {
+    /// No header parsed yet.
+    Fresh,
+    /// 4 header bytes decrypted and consumed. Large-packet flag was set,
+    /// but the 5th byte hasn't arrived yet. Stores the 4 decrypted bytes
+    /// so we can resume without re-decrypting.
+    NeedLargeExtra([u8; 4]),
+    /// Header fully parsed and consumed. Waiting for payload bytes.
+    WaitingPayload { payload_size: usize, opcode: u16 },
+}
+
 /// Codec for WoW game server packets.
+///
+/// Server-to-client header: 2-3 bytes size (BE) + 2 bytes opcode (LE).
+/// Client-to-server header: 2 bytes size (BE) + 4 bytes opcode (LE + 2 zero bytes).
+///
+/// Header bytes are consumed and decrypted exactly once, then cached
+/// across `decode()` calls if the payload hasn't fully arrived. This
+/// prevents re-decrypting with a stateful cipher (RC4) on partial reads.
 pub struct GamePacketCodec {
     header_crypt: GameHeaderCrypt,
+    state: DecoderState,
 }
 
 impl GamePacketCodec {
     pub fn new(header_crypt: GameHeaderCrypt) -> Self {
-        Self { header_crypt }
+        Self {
+            header_crypt,
+            state: DecoderState::Fresh,
+        }
     }
 
     /// Initialize header encryption with session key.
@@ -29,46 +68,102 @@ impl Decoder for GamePacketCodec {
     type Error = Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if src.is_empty() {
-            return Ok(Option::None);
-        }
+        // Try to advance the state machine until we have (payload_size, opcode).
+        let (payload_size, opcode) = match self.state {
+            DecoderState::WaitingPayload {
+                payload_size,
+                opcode,
+            } => {
+                // Header already parsed and consumed on a previous call.
+                (payload_size, opcode)
+            }
 
-        // Server to Client header is 2-3 bytes size + 2 bytes opcode
-        // Check first bit of first byte for large packet (size > 0x7FFF)
-        let large = (src[0] & 0x80) != 0;
-        let header_size = if large { 5 } else { 4 };
+            DecoderState::NeedLargeExtra(header) => {
+                // We previously decrypted 4 header bytes and found the large-packet
+                // flag, but the 5th byte wasn't available. Try again.
+                if src.is_empty() {
+                    return Ok(None);
+                }
 
-        if src.len() < header_size {
-            return Ok(Option::None);
-        }
+                // Decrypt 5th byte separately.
+                let mut extra = [src[0]];
+                self.header_crypt.decrypt(&mut extra);
+                src.advance(1);
 
-        // Copy header to decrypt
-        let mut header = [0u8; 5];
-        header[..header_size].copy_from_slice(&src[..header_size]);
-        self.header_crypt.decrypt(&mut header[..header_size]);
+                // Large header: 3-byte size + 2-byte opcode (split across header + extra)
+                let size = (((header[0] & 0x7F) as usize) << 16)
+                    | ((header[1] as usize) << 8)
+                    | (header[2] as usize);
+                let op = ((extra[0] as u16) << 8) | (header[3] as u16);
+                (size - 2, op)
+            }
 
-        let (payload_size, opcode) = if large {
-            let size = (((header[0] & 0x7F) as usize) << 16)
-                | ((header[1] as usize) << 8)
-                | (header[2] as usize);
-            let op = u16::from_le_bytes([header[3], header[4]]);
-            (size - 2, op)
-        } else {
-            let size = ((header[0] as usize) << 8) | (header[1] as usize);
-            let op = u16::from_le_bytes([header[2], header[3]]);
-            (size - 2, op)
+            DecoderState::Fresh => {
+                // Server to Client header is 2-3 bytes size + 2 bytes opcode.
+                // Need at least 4 bytes for base header.
+                if src.len() < 4 {
+                    return Ok(None);
+                }
+
+                if self.header_crypt.is_initialized() {
+                    // Encrypted path.
+                    // Decrypt initial 4-byte header, consuming from buffer.
+                    let mut header = [0u8; 4];
+                    header.copy_from_slice(&src[..4]);
+                    self.header_crypt.decrypt(&mut header);
+                    src.advance(4);
+
+                    // Check large packet flag AFTER decryption (size > 0x7FFF).
+                    if (header[0] & 0x80) != 0 {
+                        // Large packet: need 1 additional header byte.
+                        if src.is_empty() {
+                            // 5th byte hasn't arrived yet. Cache decrypted header
+                            // so we can resume without re-decrypting.
+                            self.state = DecoderState::NeedLargeExtra(header);
+                            return Ok(None);
+                        }
+
+                        // Decrypt 5th byte separately.
+                        let mut extra = [src[0]];
+                        self.header_crypt.decrypt(&mut extra);
+                        src.advance(1);
+
+                        let size = (((header[0] & 0x7F) as usize) << 16)
+                            | ((header[1] as usize) << 8)
+                            | (header[2] as usize);
+                        let op = ((extra[0] as u16) << 8) | (header[3] as u16);
+                        (size - 2, op)
+                    } else {
+                        // Normal encrypted header: 2-byte size + 2-byte opcode
+                        let size = ((header[0] as usize) << 8) | (header[1] as usize);
+                        let op = u16::from_le_bytes([header[2], header[3]]);
+                        (size - 2, op)
+                    }
+                } else {
+                    // Unencrypted path (pre-auth, SMSG_AUTH_CHALLENGE).
+                    let mut header = [0u8; 4];
+                    header.copy_from_slice(&src[..4]);
+                    src.advance(4);
+
+                    let size = ((header[0] as usize) << 8) | (header[1] as usize);
+                    let op = u16::from_le_bytes([header[2], header[3]]);
+                    (size - 2, op)
+                }
+            }
         };
 
-        if src.len() < header_size + payload_size {
-            return Ok(Option::None);
+        // Check if full payload has arrived.
+        if src.len() < payload_size {
+            self.state = DecoderState::WaitingPayload {
+                payload_size,
+                opcode,
+            };
+            return Ok(None);
         }
 
-        // Advance buffer past header
-        src.advance(header_size);
-
-        // Extract payload
+        // Reset state and extract payload.
+        self.state = DecoderState::Fresh;
         let payload = src.split_to(payload_size).freeze();
-
         Ok(Some(Packet { opcode, payload }))
     }
 }
