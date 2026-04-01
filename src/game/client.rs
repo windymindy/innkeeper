@@ -849,7 +849,7 @@ mod tests {
         payload.extend_from_slice(&[0.0_f32.to_bits() as u8, 0, 0, 0]); // Z
         payload.extend_from_slice(&[0, 0, 0, 0]); // Guild ID
         payload.extend_from_slice(&[0, 0, 0, 0]); // Character Flags
-        payload.push(0); // Recustomization
+        payload.extend_from_slice(&[0, 0, 0, 0]); // Customize Flags (WotLK)
         payload.push(0); // First Login
         payload.extend_from_slice(&[0, 0, 0, 0]); // Pet Display ID
         payload.extend_from_slice(&[0, 0, 0, 0]); // Pet Level

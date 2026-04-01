@@ -168,11 +168,12 @@ pub struct CharacterInfo {
     pub z: f32,
     pub guild_id: u32,
     pub flags: u32,
+    pub customize_flags: u32,
     pub first_login: u8,
     pub pet_display_id: u32,
     pub pet_level: u32,
     pub pet_family: u32,
-    // Equipment items (19 slots)
+    // Equipment items (23 slots for WotLK 3.3.5a: 19 equipment + 4 bags)
     // We don't really need them for a chat bridge
 }
 
@@ -204,11 +205,12 @@ impl PacketDecode for CharEnum {
             let guid = buf.get_u64_le();
             let name = read_cstring(buf, MAX_CSTRING_SHORT)?;
 
-            // 9 u8s + 5 u32s + 3 f32s + 1 u8 + 3 u32s = 9 + 20 + 12 + 1 + 12 = 53 bytes
-            // Plus 19 inventory slots × 5 bytes = 95 bytes → total 148 after name
-            if buf.remaining() < 148 {
+            // 9 u8s + 2 u32s + 3 f32s + 2 u32s + 1 u8 + 3 u32s = 9 + 8 + 12 + 8 + 1 + 12 = 50 bytes
+            // Plus 23 inventory slots × 9 bytes (u32 display + u8 inv_type + u32 enchant) = 207
+            // Total = 50 + 207 + 4(guild_id) = 261 bytes after name
+            if buf.remaining() < 261 {
                 return Err(anyhow!(
-                    "CharEnum entry too short: need 148 bytes after name, have {}",
+                    "CharEnum entry too short: need 261 bytes after name, have {}",
                     buf.remaining()
                 ));
             }
@@ -229,15 +231,14 @@ impl PacketDecode for CharEnum {
             let z = buf.get_f32_le();
             let guild_id = buf.get_u32_le();
             let flags = buf.get_u32_le();
+            let customize_flags = buf.get_u32_le();
             let first_login = buf.get_u8();
             let pet_display_id = buf.get_u32_le();
             let pet_level = buf.get_u32_le();
             let pet_family = buf.get_u32_le();
 
-            // Skip inventory (19 * (4 + 1))
-            for _ in 0..19 {
-                buf.advance(5);
-            }
+            // Skip inventory (23 slots × (u32 display_id + u8 inv_type + u32 enchant) = 23 × 9)
+            buf.advance(9 * 23);
 
             characters.push(CharacterInfo {
                 guid,
@@ -258,6 +259,7 @@ impl PacketDecode for CharEnum {
                 z,
                 guild_id,
                 flags,
+                customize_flags,
                 first_login,
                 pet_display_id,
                 pet_level,
