@@ -32,6 +32,10 @@ jobs:
             os: ubuntu-latest
             artifact: innkeeper-linux-amd64
             binary: innkeeper
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            artifact: innkeeper-linux-arm64
+            binary: innkeeper
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: innkeeper-windows-amd64
