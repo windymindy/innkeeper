@@ -19,7 +19,7 @@ use crate::game::formatter::{
 };
 
 use super::filter::{FilterDirection, MessageFilter};
-use super::state::parse_channel_config;
+use super::state::{parse_channel_config, BridgeConfig};
 
 /// The main bridge that orchestrates message flow.
 pub struct Bridge {
@@ -29,8 +29,8 @@ pub struct Bridge {
     global_filter: MessageFilter,
     /// Per-channel filters keyed by Discord channel name.
     per_channel_filters: HashMap<String, MessageFilter>,
-    /// Configuration (accessed for feature flags like enable_dot_commands and guild events).
-    config: Config,
+    /// Bridge-specific configuration (feature flags and guild events only).
+    config: BridgeConfig,
 }
 
 impl Bridge {
@@ -52,7 +52,10 @@ impl Bridge {
             router,
             global_filter,
             per_channel_filters,
-            config: config.clone(),
+            config: BridgeConfig {
+                enable_markdown: config.discord.enable_markdown,
+                guild: config.guild.clone(),
+            },
         }
     }
 
@@ -239,7 +242,7 @@ impl Bridge {
         // Check if this is a guild event and if it's enabled
         let event_name = guild_event.as_ref().map(|e| e.event_name.as_str());
         if let Some(event_name) = event_name {
-            if !self.config.is_guild_event_enabled(event_name) {
+            if !self.config.guild.is_event_enabled(event_name) {
                 debug!(
                     "Guild event '{}' is disabled in config, not sending to Discord",
                     event_name
@@ -269,7 +272,7 @@ impl Bridge {
                 .or_else(|| {
                     // If this is a guild event, get format from guild event config
                     if let Some(event_name) = event_name {
-                        self.config.get_guild_event_format(event_name)
+                        self.config.guild.get_event_format(event_name)
                     } else {
                         None
                     }
@@ -362,7 +365,7 @@ impl Bridge {
             return "No guildies online.".to_string();
         }
 
-        let enable_markdown = self.config.discord.enable_markdown;
+        let enable_markdown = self.config.enable_markdown;
         let count = members.len();
         let header = if let Some(name) = guild_name {
             if enable_markdown {
@@ -415,7 +418,7 @@ impl Bridge {
         member: Option<&GuildMember>,
         guild_name: Option<&str>,
     ) -> String {
-        let enable_markdown = self.config.discord.enable_markdown;
+        let enable_markdown = self.config.enable_markdown;
 
         match member {
             Some(m) => {
@@ -450,7 +453,7 @@ impl Bridge {
                     }
                 }
             }
-            None => format!("Player '{}' not found in.", player_name),
+            None => format!("Player '{}' not found.", player_name),
         }
     }
 
@@ -458,7 +461,7 @@ impl Bridge {
         if let Some(m) = motd {
             if !m.is_empty() {
                 // Apply custom format if configured
-                if let Some(format) = self.config.get_guild_event_format("motd") {
+                if let Some(format) = self.config.guild.get_event_format("motd") {
                     let formatter = MessageFormatter::new(&format);
                     let ctx = FormatContext::new("", m);
                     return formatter.format(&ctx);
@@ -959,7 +962,6 @@ mod tests {
         let config = make_test_config();
         let bridge = Bridge::new(&config);
 
-        assert!(bridge.config.discord.enable_dot_commands);
         assert!(bridge.channels_to_join().is_empty()); // "guild" is not a custom channel
     }
 
@@ -1068,7 +1070,7 @@ mod formatting_tests {
         let bridge = make_bridge();
         let response = bridge.format_who_search("UnknownPlayer", None, None);
         assert!(response.contains("UnknownPlayer"));
-        assert!(response.contains("not found in"));
+        assert!(response.contains("not found"));
     }
 
     #[test]

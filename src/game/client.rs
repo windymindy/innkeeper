@@ -374,13 +374,7 @@ impl GameClient {
                 }
             }
             None => {
-                // Send name queries only for GUIDs that don't already have one in-flight
-                for guid in handler.pending_messages.keys() {
-                    if handler.pending_name_queries.insert(*guid) {
-                        let name_query = handler.build_name_query(*guid);
-                        connection.send(name_query.into()).await?;
-                    }
-                }
+                send_pending_name_queries(handler, connection).await?;
             }
         }
         Ok(())
@@ -403,13 +397,7 @@ impl GameClient {
                 }
             }
             None => {
-                // Send name queries only for GUIDs that don't already have one in-flight
-                for guid in handler.pending_messages.keys() {
-                    if handler.pending_name_queries.insert(*guid) {
-                        let name_query = handler.build_name_query(*guid);
-                        connection.send(name_query.into()).await?;
-                    }
-                }
+                send_pending_name_queries(handler, connection).await?;
             }
         }
         Ok(())
@@ -712,6 +700,24 @@ impl GameClient {
     }
 }
 
+/// Send NAME_QUERY packets for all pending message GUIDs that don't already
+/// have a query in-flight. Shared by `on_messagechat` and `on_gm_messagechat`.
+async fn send_pending_name_queries<S>(
+    handler: &mut GameHandler,
+    connection: &mut GameConnection<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    for guid in handler.pending_messages.keys() {
+        if handler.pending_name_queries.insert(*guid) {
+            let name_query = handler.build_name_query(*guid);
+            connection.send(name_query.into()).await?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -752,7 +758,7 @@ mod tests {
         tokio::spawn(async move {
             if let Err(e) = client.handle_connection(client_stream, session).await {
                 // It might fail when we close the stream, which is fine
-                println!("Client finished: {:?}", e);
+                debug!("Client finished: {}", e);
             }
         });
 

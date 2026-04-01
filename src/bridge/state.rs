@@ -8,9 +8,16 @@ use tokio::sync::mpsc;
 
 use crate::common::types::ChatType;
 use crate::common::BridgeMessage;
-use crate::config::types::{Direction, GuildDashboardConfig, WowChannelConfig};
+use crate::config::types::{Direction, GuildDashboardConfig, GuildEventsConfig, WowChannelConfig};
 use crate::discord::commands::WowCommand;
 use crate::discord::resolver::MessageResolver;
+
+/// Subset of Config that the Bridge actually needs.
+/// Avoids cloning credentials and connection details into the bridge.
+pub struct BridgeConfig {
+    pub enable_markdown: bool,
+    pub guild: GuildEventsConfig,
+}
 
 /// Configuration for a channel mapping.
 #[derive(Debug, Clone)]

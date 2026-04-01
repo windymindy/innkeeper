@@ -1002,7 +1002,7 @@ impl GameHandler {
                 ));
             }
             let flags2 = buf.get_u32_le(); // flags_
-            let _flags3 = buf.get_u16_le(); // flags__ (readChar.reverseBytes)
+            let flags3 = buf.get_u16_le(); // flags__ (readChar.reverseBytes)
             buf.advance(4); // time?
 
             x = buf.get_f32_le();
@@ -1024,7 +1024,7 @@ impl GameHandler {
                 buf.advance(4 * 4);
                 buf.advance(4);
                 buf.advance(1);
-                if (_flags3 & 0x400) == 0x400 {
+                if (flags3 & 0x400) == 0x400 {
                     if buf.remaining() < 4 {
                         return Err(anyhow!(
                             "parse_movement: ONTRANSPORT extra needs 4 bytes, have {}",
@@ -1038,7 +1038,7 @@ impl GameHandler {
             if (flags2 & 0x200000) == 0x200000 // MOVEMENTFLAG_SWIMMING
                 || (flags2 & 0x2000000) == 0x2000000
                     // MOVEMENTFLAG_FLYING
-                    || (_flags3 & 0x20) == 0x20
+                    || (flags3 & 0x20) == 0x20
             {
                 if buf.remaining() < 4 {
                     return Err(anyhow!(

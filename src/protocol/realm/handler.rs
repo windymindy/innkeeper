@@ -494,11 +494,9 @@ mod tests {
             .expect("Failed to build logon challenge packet");
 
         // Print packet for comparison
-        println!("\n========================================");
-        println!("AUTH_LOGON_CHALLENGE Packet ({} bytes)", packet.len());
-        println!("========================================");
+        debug!("AUTH_LOGON_CHALLENGE Packet ({} bytes)", packet.len());
+        debug!("========================================");
         print_hex_dump(&packet);
-        println!("========================================\n");
 
         // If expected packet is provided, validate
         if !EXPECTED_PACKET.is_empty() {
@@ -518,11 +516,11 @@ mod tests {
                 );
             }
 
-            println!("✓ Test PASSED - packet matches expected result!");
+            debug!("✓ Test PASSED - packet matches expected result!");
         } else {
-            println!("⚠ No expected packet provided for comparison");
-            println!("  Compare the hex dump above with your working client's packet");
-            println!("  Then add the expected bytes to EXPECTED_PACKET constant\n");
+            debug!("⚠ No expected packet provided for comparison");
+            debug!("  Compare the hex dump above with your working client's packet");
+            debug!("  Then add the expected bytes to EXPECTED_PACKET constant\n");
             panic!("Test incomplete - expected packet not provided for validation");
         }
     }

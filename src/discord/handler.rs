@@ -19,6 +19,7 @@ use crate::bridge::{
 use crate::common::messages::{split_message_preserving_newlines, DashboardEvent};
 use crate::common::{ActivityStatus, BridgeMessage, DiscordMessage};
 use crate::config::types::GuildDashboardConfig;
+use crate::protocol::game::chat::chat_events;
 use crate::discord::commands::{CommandHandler, CommandResponse, WowCommand};
 use crate::discord::dashboard::DashboardRenderer;
 
@@ -146,7 +147,7 @@ impl BridgeHandler {
                                         let whisper_msg = BridgeMessage {
                                             sender: None,
                                             content: error_msg.clone(),
-                                            chat_type: 7, // CHAT_MSG_WHISPER
+                                            chat_type: chat_events::CHAT_MSG_WHISPER,
                                             channel_name: Some(sender.clone()),
                                             format: None,
                                             guild_event: None,
@@ -269,6 +270,7 @@ impl BridgeHandler {
             return;
         }
 
+        // Several instances may connect in-game guilds.
         /*if msg.author.bot {
             return;
         }*/

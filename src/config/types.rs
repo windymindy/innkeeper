@@ -518,6 +518,34 @@ pub struct GuildEventsConfig {
     pub achievement: Option<GuildEventConfig>,
 }
 
+impl GuildEventsConfig {
+    /// Look up the config for a guild event by name.
+    fn get_event_config(&self, event: &str) -> Option<&GuildEventConfig> {
+        match event {
+            "online" => self.online.as_ref(),
+            "offline" => self.offline.as_ref(),
+            "promoted" => self.promoted.as_ref(),
+            "demoted" => self.demoted.as_ref(),
+            "joined" => self.joined.as_ref(),
+            "left" => self.left.as_ref(),
+            "removed" => self.removed.as_ref(),
+            "motd" => self.motd.as_ref(),
+            "achievement" => self.achievement.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Check if a guild event is enabled.
+    pub fn is_event_enabled(&self, event: &str) -> bool {
+        self.get_event_config(event).map_or(false, |c| c.enabled)
+    }
+
+    /// Get format string for a guild event.
+    pub fn get_event_format(&self, event: &str) -> Option<String> {
+        self.get_event_config(event).and_then(|c| c.format.clone())
+    }
+}
+
 /// Individual guild event configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GuildEventConfig {
@@ -701,32 +729,14 @@ impl Config {
         self.wow.enable_server_motd
     }
 
-    /// Get the guild event configuration for an event type.
-    fn get_guild_event_config(&self, event: &str) -> Option<&GuildEventConfig> {
-        match event {
-            "online" => self.guild.online.as_ref(),
-            "offline" => self.guild.offline.as_ref(),
-            "promoted" => self.guild.promoted.as_ref(),
-            "demoted" => self.guild.demoted.as_ref(),
-            "joined" => self.guild.joined.as_ref(),
-            "left" => self.guild.left.as_ref(),
-            "removed" => self.guild.removed.as_ref(),
-            "motd" => self.guild.motd.as_ref(),
-            "achievement" => self.guild.achievement.as_ref(),
-            _ => None,
-        }
-    }
-
     /// Check if guild event is enabled.
     pub fn is_guild_event_enabled(&self, event: &str) -> bool {
-        self.get_guild_event_config(event)
-            .map_or(false, |c| c.enabled)
+        self.guild.is_event_enabled(event)
     }
 
     /// Get format for a guild event.
     pub fn get_guild_event_format(&self, event: &str) -> Option<String> {
-        self.get_guild_event_config(event)
-            .and_then(|c| c.format.clone())
+        self.guild.get_event_format(event)
     }
 }
 

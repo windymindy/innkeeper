@@ -18,7 +18,9 @@ pub mod state;
 // Re-export main types for convenience
 pub use channels::{ChannelBundle, GameChannels};
 pub use orchestrator::Bridge;
-pub use state::{parse_channel_config, ChannelConfig, PendingBridgeState, ResolvedBridgeState};
+pub use state::{
+    parse_channel_config, BridgeConfig, ChannelConfig, PendingBridgeState, ResolvedBridgeState,
+};
 
 // Re-export message types from common for backwards compatibility
 pub use crate::common::{BridgeCommand, BridgeMessage};

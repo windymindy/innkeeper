@@ -296,6 +296,9 @@ impl MessageResolver {
         let mut result = String::with_capacity(message.len() * 2);
         let mut chars = message.chars().peekable();
 
+        // This is naive.
+        // Use a library for unicode segmentation?
+        // No use case currently.
         while let Some(ch) = chars.next() {
             // Try single character emoji first
             if let Some(emoji) = emojis::get(ch.to_string().as_str()) {
